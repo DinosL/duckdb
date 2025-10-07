@@ -79,6 +79,8 @@ struct ClientConfig {
 	//! If this context should also try to use the available replacement scans
 	//! True by default
 	bool use_replacement_scans = true;
+	//
+	bool retain_unnest_parent_names = false;
 
 	//! The maximum amount of memory to keep buffered in a streaming query result. Default: 1mb.
 	idx_t streaming_buffer_size = 1000000;

@@ -1134,8 +1134,10 @@ struct RetainUnnestParentNamesSetting {
 	static constexpr const char *Name = "retain_unnest_parent_names";
 	static constexpr const char *Description = "Keep parent names when unfolding an unnest";
 	static constexpr const char *InputType = "BOOLEAN";
-	static void SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &parameter);
-	static void ResetGlobal(DatabaseInstance *db, DBConfig &config);
+	static void SetLocal(ClientContext &context, const Value &parameter);
+	static void ResetLocal(ClientContext &context);
+	static bool OnLocalSet(ClientContext &context, const Value &input);
+	static bool OnLocalReset(ClientContext &context);
 	static Value GetSetting(const ClientContext &context);
 };
 

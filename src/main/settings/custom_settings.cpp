@@ -889,6 +889,13 @@ bool EnableProgressBarSetting::OnLocalReset(ClientContext &context) {
 	return true;
 }
 
+bool RetainUnnestParentNamesSetting::OnLocalSet(ClientContext &context, const Value &input) {
+	return input.GetValue<bool>();
+}
+bool RetainUnnestParentNamesSetting::OnLocalReset(ClientContext &context) {
+	return false;
+}
+
 //===----------------------------------------------------------------------===//
 // External Threads
 //===----------------------------------------------------------------------===//

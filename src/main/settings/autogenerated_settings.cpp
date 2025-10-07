@@ -513,6 +513,22 @@ Value PinThreadsSetting::GetSetting(const ClientContext &context) {
 }
 
 //===----------------------------------------------------------------------===//
+// Retain Unnest Parent Names
+//===----------------------------------------------------------------------===//
+void RetainUnnestParentNamesSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
+	config.options.retain_unnest_parent_names = input.GetValue<bool>();
+}
+
+void RetainUnnestParentNamesSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
+	config.options.retain_unnest_parent_names = DBConfigOptions().retain_unnest_parent_names;
+}
+
+Value RetainUnnestParentNamesSetting::GetSetting(const ClientContext &context) {
+	auto &config = DBConfig::GetConfig(context);
+	return Value::BOOLEAN(config.options.retain_unnest_parent_names);
+}
+
+//===----------------------------------------------------------------------===//
 // Scheduler Process Partial
 //===----------------------------------------------------------------------===//
 void SchedulerProcessPartialSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {

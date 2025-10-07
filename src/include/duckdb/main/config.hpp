@@ -219,6 +219,8 @@ struct DBConfigOptions {
 	ThreadPinMode pin_threads = ThreadPinMode::AUTO;
 
 	bool operator==(const DBConfigOptions &other) const;
+	//
+	bool retain_unnest_parent_names = false;
 };
 
 struct DBConfig {

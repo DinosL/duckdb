@@ -40,6 +40,7 @@ struct TableScanLocalState : public LocalTableFunctionState {
 	//! The DataChunk containing all read columns.
 	//! This includes filter columns, which are immediately removed.
 	DataChunk all_columns;
+	idx_t row_number_count;
 };
 
 struct IndexScanLocalState : public LocalTableFunctionState {
@@ -69,6 +70,10 @@ static StorageIndex GetStorageIndex(TableCatalogEntry &table, const ColumnIndex 
 		return StorageIndex();
 	}
 
+	if (column_id.IsRowNumberColumn()) {
+		return StorageIndex(COLUMN_IDENTIFIER_ROW_NUMBER);
+	}
+
 	// The index of the base ColumnIndex is equal to the physical column index in the table
 	// for any child indices because the indices are already the physical indices.
 	// Only the top-level can have generated columns.
@@ -93,6 +98,8 @@ public:
 	vector<idx_t> projection_ids;
 	//! The types of all scanned columns.
 	vector<LogicalType> scanned_types;
+	//! row_number offsets for each row group
+	vector<idx_t> row_number_offsets;
 
 public:
 	virtual unique_ptr<LocalTableFunctionState> InitLocalState(ExecutionContext &context,
@@ -263,6 +270,7 @@ public:
 	void TableScanFunc(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) override {
 		auto &l_state = data_p.local_state->Cast<TableScanLocalState>();
 		l_state.scan_state.options.force_fetch_row = ClientConfig::GetConfig(context).force_fetch_row;
+		auto &global_state = data_p.global_state->Cast<TableScanGlobalState>();
 
 		do {
 			if (context.interrupted) {
@@ -279,6 +287,30 @@ public:
 				storage.Scan(tx, output, l_state.scan_state);
 			}
 			if (output.size() > 0) {
+				// FIXME Can be improved if at a previous step we mark if row_numbers are needed
+				idx_t row_number_col_index = DConstants::INVALID_INDEX;
+				auto column_ids = l_state.scan_state.GetColumnIds();
+				for (idx_t i = 0; i < column_ids.size(); i++) {
+					if (column_ids[i].GetPrimaryIndex() == COLUMN_IDENTIFIER_ROW_NUMBER) {
+						row_number_col_index = i;
+						break;
+					}
+				}
+				if (row_number_col_index != DConstants::INVALID_INDEX) {
+					auto &row_number_vec = output.data[row_number_col_index];
+					row_number_vec.SetVectorType(VectorType::FLAT_VECTOR);
+					auto row_number_data = FlatVector::GetData<row_t>(row_number_vec);
+					auto count = output.size();
+
+					idx_t row_group_index = l_state.scan_state.table_state.batch_index - 1;
+					D_ASSERT(row_group_index < global_state.row_number_offsets.size());
+					idx_t base = global_state.row_number_offsets[row_group_index] + l_state.row_number_count;
+
+					for (idx_t i = 0; i < count; i++) {
+						row_number_data[i] = static_cast<row_t>(base + i + 1);
+					}
+					l_state.row_number_count += count;
+				}
 				return;
 			}
 
@@ -286,6 +318,7 @@ public:
 			if (!next) {
 				return;
 			}
+			l_state.row_number_count = 0;
 		} while (true);
 	}
 
@@ -330,6 +363,21 @@ unique_ptr<GlobalTableFunctionState> DuckTableScanInitGlobal(ClientContext &cont
                                                              DataTable &storage, const TableScanBindData &bind_data) {
 	auto g_state = make_uniq<DuckTableScanState>(context, input.bind_data.get());
 	storage.InitializeParallelScan(context, g_state->state);
+	// FIXME O(n) complexity, can be improved?? Maybe if I can embed it in a for in any of the previous steps
+	// FIXME or do a for with break when found, but still not good enough
+	if (std::find(input.column_ids.begin(), input.column_ids.end(), COLUMN_IDENTIFIER_ROW_NUMBER) !=
+	    input.column_ids.end()) {
+		idx_t current_offset = 0;
+		int64_t counter = 0;
+		auto row_groups = g_state->state.scan_state.collection;
+		auto row_group = row_groups->GetRowGroup(counter);
+		while (row_group) {
+			g_state->row_number_offsets.push_back(current_offset);
+			current_offset += row_group->GetCommittedRowCount();
+			counter++;
+			row_group = row_groups->GetRowGroup(counter);
+		}
+	}
 	if (!input.CanRemoveFilterColumns()) {
 		return std::move(g_state);
 	}
@@ -338,7 +386,7 @@ unique_ptr<GlobalTableFunctionState> DuckTableScanInitGlobal(ClientContext &cont
 	auto &duck_table = bind_data.table.Cast<DuckTableEntry>();
 	const auto &columns = duck_table.GetColumns();
 	for (const auto &col_idx : input.column_indexes) {
-		if (col_idx.IsRowIdColumn()) {
+		if (col_idx.IsRowIdColumn() || col_idx.IsRowNumberColumn()) {
 			g_state->scanned_types.emplace_back(LogicalType::ROW_TYPE);
 		} else {
 			g_state->scanned_types.push_back(columns.GetColumn(col_idx.ToLogical()).Type());

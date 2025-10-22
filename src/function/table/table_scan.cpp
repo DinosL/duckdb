@@ -100,6 +100,8 @@ public:
 	vector<LogicalType> scanned_types;
 	//! row_number offsets for each row group
 	vector<idx_t> row_number_offsets;
+	//! row_number column index
+	idx_t row_number_col_index = DConstants::INVALID_INDEX;
 
 public:
 	virtual unique_ptr<LocalTableFunctionState> InitLocalState(ExecutionContext &context,
@@ -287,15 +289,6 @@ public:
 				storage.Scan(tx, output, l_state.scan_state);
 			}
 			if (output.size() > 0) {
-				// FIXME Can be improved if at a previous step we mark if row_numbers are needed
-				idx_t row_number_col_index = DConstants::INVALID_INDEX;
-				auto column_ids = l_state.scan_state.GetColumnIds();
-				for (idx_t i = 0; i < column_ids.size(); i++) {
-					if (column_ids[i].GetPrimaryIndex() == COLUMN_IDENTIFIER_ROW_NUMBER) {
-						row_number_col_index = i;
-						break;
-					}
-				}
 				if (row_number_col_index != DConstants::INVALID_INDEX) {
 					auto &row_number_vec = output.data[row_number_col_index];
 					row_number_vec.SetVectorType(VectorType::FLAT_VECTOR);
@@ -360,13 +353,16 @@ static unique_ptr<LocalTableFunctionState> TableScanInitLocal(ExecutionContext &
 }
 
 unique_ptr<GlobalTableFunctionState> DuckTableScanInitGlobal(ClientContext &context, TableFunctionInitInput &input,
-                                                             DataTable &storage, const TableScanBindData &bind_data) {
+															 DataTable &storage, const TableScanBindData &bind_data) {
 	auto g_state = make_uniq<DuckTableScanState>(context, input.bind_data.get());
 	storage.InitializeParallelScan(context, g_state->state);
-	// FIXME O(n) complexity, can be improved?? Maybe if I can embed it in a for in any of the previous steps
-	// FIXME or do a for with break when found, but still not good enough
-	if (std::find(input.column_ids.begin(), input.column_ids.end(), COLUMN_IDENTIFIER_ROW_NUMBER) !=
-	    input.column_ids.end()) {
+	for (idx_t i = 0; i < input.column_ids.size(); i++) {
+		if (input.column_ids[i] == COLUMN_IDENTIFIER_ROW_NUMBER) {
+			g_state->row_number_col_index = i;
+			break;
+		}
+	}
+	if (g_state->row_number_col_index != DConstants::INVALID_INDEX) {
 		idx_t current_offset = 0;
 		int64_t counter = 0;
 		auto row_groups = g_state->state.scan_state.collection;

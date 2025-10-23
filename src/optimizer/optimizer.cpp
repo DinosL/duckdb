@@ -36,6 +36,7 @@
 #include "duckdb/optimizer/unnest_rewriter.hpp"
 #include "duckdb/optimizer/late_materialization.hpp"
 #include "duckdb/optimizer/common_subplan_optimizer.hpp"
+#include "duckdb/optimizer/window_rewriter.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/planner.hpp"
 
@@ -243,6 +244,12 @@ void Optimizer::RunBuiltInOptimizers() {
 	RunOptimizer(OptimizerType::SAMPLING_PUSHDOWN, [&]() {
 		SamplingPushdown sampling_pushdown;
 		plan = sampling_pushdown.Optimize(std::move(plan));
+	});
+
+	// Rewrite window functions to emit row_numbers in parallel
+	RunOptimizer(OptimizerType::WINDOW_REWRITER, [&]() {
+		WindowRewriter window_rewriter(*this);
+		plan = window_rewriter.Optimize(std::move(plan));
 	});
 
 	// transform ORDER BY + LIMIT to TopN

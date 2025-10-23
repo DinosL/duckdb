@@ -353,7 +353,7 @@ static unique_ptr<LocalTableFunctionState> TableScanInitLocal(ExecutionContext &
 }
 
 unique_ptr<GlobalTableFunctionState> DuckTableScanInitGlobal(ClientContext &context, TableFunctionInitInput &input,
-															 DataTable &storage, const TableScanBindData &bind_data) {
+                                                             DataTable &storage, const TableScanBindData &bind_data) {
 	auto g_state = make_uniq<DuckTableScanState>(context, input.bind_data.get());
 	storage.InitializeParallelScan(context, g_state->state);
 	for (idx_t i = 0; i < input.column_ids.size(); i++) {

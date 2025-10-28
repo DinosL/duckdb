@@ -12,17 +12,15 @@
 
 namespace duckdb {
 
-class WindowRewriter  : public BaseColumnPruner {
+class WindowRewriter : public BaseColumnPruner {
 public:
-
 	explicit WindowRewriter(Optimizer &optimizer);
 	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> op);
 	unique_ptr<LogicalOperator> OptimizeInternal(unique_ptr<LogicalOperator> op, ColumnBindingReplacer &replacer);
 	static bool CanOptimize(LogicalOperator &op);
 
-
 private:
 	Optimizer &optimizer;
 };
 
-}
+} // namespace duckdb

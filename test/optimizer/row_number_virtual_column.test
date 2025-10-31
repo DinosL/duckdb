@@ -2,71 +2,149 @@
 # description: Test row_number virtual column
 # group: [optimizer]
 
+# statement ok
+# PRAGMA enable_verification;
+
+# statement ok
+# pragma disable_optimizer;
+#
+# # statement ok
+# # pragma threads=2;
+#
+# statement ok
+# CREATE OR REPLACE TABLE foo AS SELECT range a FROM range(500000);
+#
+# statement ok
+# delete from foo where a<10;
+#
+# query II
+# select a, row_number from foo limit 10;
+# ----
+# 10	1
+# 11	2
+# 12	3
+# 13	4
+# 14	5
+# 15	6
+# 16	7
+# 17	8
+# 18	9
+# 19	10
+#
+#
+# query II
+# select a, row_number from foo where a >= 100000 and a < 200000 limit 1;
+# ----
+# 100000	99991
+#
+#
+# statement ok
+# delete from foo where a>1500 and a < 150000;
+#
+# statement ok
+# delete from foo where a>1 and a < 1500;
+#
+# query II
+# select a, row_number from foo limit 10;
+# ----
+# 1500	1
+# 150000	2
+# 150001	3
+# 150002	4
+# 150003	5
+# 150004	6
+# 150005	7
+# 150006	8
+# 150007	9
+# 150008	10
+#
+# statement ok
+# CREATE OR REPLACE TABLE foo AS SELECT range a FROM range(500000);
+#
+# statement ok
+# delete from foo where a>150 and a < 1500;
+#
+#
+# query III
+# select a,rowid, row_number from foo order by a desc limit 1;
+# ----
+# 499999	499999	498651
+#
+# query II
+# SELECT a, row_number FROM foo USING SAMPLE reservoir(5 ROWS) REPEATABLE (100);
+# ----
+# 17312	15964
+# 12210	10862
+# 19148	17800
+# 2438	1090
+# 16204	14856
+
 statement ok
 pragma disable_optimizer;
 
+statement ok
+CREATE OR REPLACE TABLE foo AS SELECT range a FROM range(100);
+
+statement ok
+DELETE FROM foo where a % 5 = 0;
+
+statement ok
+pragma enable_optimizer;
+
+# SELECT a, row_number FROM (select a, row_number from foo where row_number > 10 order by hash(rowid + 32)) limit 5;
+query II
+select a, row_number from foo where a > 50 and row_number > 10 limit 5;
+----
+51	41
+52	42
+53	43
+54	44
+56	45
+
+
 # statement ok
-# pragma threads=2;
-
-statement ok
-CREATE OR REPLACE TABLE foo AS SELECT range a FROM range(500000);
-
-statement ok
-delete from foo where a<10;
-
-query II
-select a, row_number from foo limit 10;
-----
-10	1
-11	2
-12	3
-13	4
-14	5
-15	6
-16	7
-17	8
-18	9
-19	10
-
-
-query II
-select a, row_number from foo where a >= 100000 and a < 200000 limit 1;
-----
-100000	99991
-
-
-statement ok
-delete from foo where a>1500 and a < 150000;
-
-statement ok
-delete from foo where a>1 and a < 1500;
-
-query II
-select a, row_number from foo limit 10;
-----
-1500	1
-150000	2
-150001	3
-150002	4
-150003	5
-150004	6
-150005	7
-150006	8
-150007	9
-150008	10
-
-statement ok
-CREATE OR REPLACE TABLE foo AS SELECT range a FROM range(500000);
-
-statement ok
-delete from foo where a>150 and a < 1500;
-
-# query IIII
-# select a,rowid, row_number, row_number() over() as x from foo order by a desc limit 1;
+# CREATE TABLE t1 AS SELECT range AS id, range * 10 AS a FROM range(1, 11);
+#
+# statement ok
+# CREATE TABLE t2 AS SELECT range AS id, range + 5 AS b FROM range(5, 16);
+#
+# query II
+# SELECT t1.a, t2.b, row_number FROM t1 JOIN t2 ON t1.id = t2.id;
 # ----
-# 129999	129999	198651	198651
 
-query III
-select a,rowid, row_number from foo order by a desc limit 1;
+statement ok
+create or replace table tbl1 as select range a from range(100);
+
+query I
+SELECT SUM(row_number) AS total_row_numbers FROM tbl1;
 ----
-499999	499999	498651
+5050
+
+query II
+SELECT a, row_number FROM tbl1 ORDER BY a limit 3;
+----
+0	1
+1	2
+2	3
+
+query II
+SELECT a, row_number FROM tbl1 ORDER BY row_number limit 3;
+----
+0	1
+1	2
+2	3
+
+query II
+SELECT a, row_number FROM tbl1 ORDER BY a DESC limit 3;
+----
+99	3
+98	2
+97	1
+
+query II
+SELECT a, row_number FROM tbl1 ORDER BY row_number DESC limit 3;
+----
+99	3
+98	2
+97	1
+

@@ -22,6 +22,7 @@
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/optimizer/column_lifetime_analyzer.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 
@@ -323,6 +324,10 @@ FilterPushdownResult FilterCombiner::TryPushdownConstantFilter(TableFilterSet &t
 	if (!TryGetBoundColumnIndex(column_ids, expr, column_index)) {
 		return FilterPushdownResult::NO_PUSHDOWN;
 	}
+	// if (column_index.IsRowNumberColumn()) {
+	// 	// equivalence_map.erase(filter_exp);
+	// 	return FilterPushdownResult::NO_PUSHDOWN;
+	// }
 
 	auto &constant_list = constant_values.find(equiv_set)->second;
 	for (auto &constant_cmp : constant_list) {
@@ -357,6 +362,20 @@ FilterPushdownResult FilterCombiner::TryPushdownGenericExpression(LogicalGet &ge
 			return FilterPushdownResult::NO_PUSHDOWN;
 		}
 	}
+	//
+	// // Do not push the filter down if row_number is projected
+	// auto &column_ids = get.GetColumnIds();
+	// for (auto &binding : bindings) {
+	// 	if (binding.table_index == get.table_index) {
+	// 		// if (binding.column_index < column_ids.size()) {
+	// 			auto column_id = column_ids[binding.column_index];
+	// 			if (column_id.IsRowNumberColumn()) {
+	// 				return FilterPushdownResult::NO_PUSHDOWN;
+	// 			}
+	// 		// }
+	// 	}
+	// }
+
 	if (!get.function.pushdown_expression(context, get, expr)) {
 		// the scan does not support pushing down THIS expression
 		return FilterPushdownResult::NO_PUSHDOWN;

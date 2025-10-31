@@ -11,6 +11,19 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownGet(unique_ptr<LogicalOperat
 	D_ASSERT(op->type == LogicalOperatorType::LOGICAL_GET);
 	auto &get = op->Cast<LogicalGet>();
 
+	// Do not push **any** filter down if row_number is projected
+	auto column_ids = get.GetColumnIds();
+	bool row_numbers_project = false;
+	for (auto col_id : column_ids) {
+		if (col_id.IsRowNumberColumn()) {
+			row_numbers_project = true;
+			break;
+		}
+	}
+	if (row_numbers_project) {
+		return FinishPushdown(std::move(op));
+	}
+
 	if (get.function.pushdown_complex_filter || get.function.filter_pushdown) {
 		// this scan supports some form of filter push-down
 		// check if there are any parameters

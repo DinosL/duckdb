@@ -29,7 +29,6 @@ public:
 	//! Whether the specific optimizer is disabled
 	bool OptimizerDisabled(OptimizerType type);
 	static bool OptimizerDisabled(ClientContext &context, OptimizerType type);
-	bool generate_row_number;
 
 public:
 	ClientContext &context;

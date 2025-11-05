@@ -17,10 +17,12 @@ public:
 	explicit WindowRewriter(Optimizer &optimizer);
 	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> op);
 	unique_ptr<LogicalOperator> OptimizeInternal(unique_ptr<LogicalOperator> op, ColumnBindingReplacer &replacer);
-	static bool CanOptimize(LogicalOperator &op);
+	bool CanOptimize(LogicalOperator &op);
+	unique_ptr<LogicalOperator> RewriteGet(unique_ptr<LogicalOperator> op, ColumnBindingReplacer &replacer);
 
 private:
 	Optimizer &optimizer;
+	bool lhs_window;
 };
 
 } // namespace duckdb

@@ -58,7 +58,6 @@ bool WindowRewriter::CanOptimize(LogicalOperator &op) {
 }
 
 unique_ptr<LogicalOperator> WindowRewriter::Optimize(unique_ptr<LogicalOperator> op) {
-
 	ColumnBindingReplacer replacer;
 	op = OptimizeInternal(std::move(op), replacer);
 
@@ -146,7 +145,6 @@ unique_ptr<LogicalOperator> WindowRewriter::Rewrite(unique_ptr<LogicalOperator> 
 
 unique_ptr<LogicalOperator> WindowRewriter::OptimizeInternal(unique_ptr<LogicalOperator> op,
                                                              ColumnBindingReplacer &replacer) {
-
 	if (CanOptimize(*op)) {
 		return Rewrite(std::move(op), replacer);
 	}

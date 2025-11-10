@@ -2930,20 +2930,12 @@ const StringUtil::EnumStringLiteral *GetMetricsTypeValues() {
 
 template<>
 const char* EnumUtil::ToChars<MetricsType>(MetricsType value) {
-<<<<<<< HEAD
-	return StringUtil::EnumToString(GetMetricsTypeValues(), 61, "MetricsType", static_cast<uint32_t>(value));
-=======
-	return StringUtil::EnumToString(GetMetricsTypeValues(), 62, "MetricsType", static_cast<uint32_t>(value));
->>>>>>> upstream/main
+	return StringUtil::EnumToString(GetMetricsTypeValues(), 63, "MetricsType", static_cast<uint32_t>(value));
 }
 
 template<>
 MetricsType EnumUtil::FromString<MetricsType>(const char *value) {
-<<<<<<< HEAD
-	return static_cast<MetricsType>(StringUtil::StringToEnum(GetMetricsTypeValues(), 61, "MetricsType", value));
-=======
-	return static_cast<MetricsType>(StringUtil::StringToEnum(GetMetricsTypeValues(), 62, "MetricsType", value));
->>>>>>> upstream/main
+	return static_cast<MetricsType>(StringUtil::StringToEnum(GetMetricsTypeValues(), 63, "MetricsType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetMultiFileColumnMappingModeValues() {

@@ -6,6 +6,8 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/optimizer/column_binding_replacer.hpp"
+#include "duckdb/planner/binder.hpp"
 
 namespace duckdb {
 

@@ -28,14 +28,22 @@ namespace duckdb {
 
 RowGroup::RowGroup(RowGroupCollection &collection_p, idx_t start, idx_t count)
     : SegmentBase<RowGroup>(start, count), collection(collection_p), version_info(nullptr), deletes_is_loaded(false),
+<<<<<<< HEAD
       allocation_size(0), row_id_is_loaded(false), row_number_is_loaded(false), has_changes(false) {
+=======
+      allocation_size(0), row_id_is_loaded(false), has_changes(false) {
+>>>>>>> upstream/main
 	Verify();
 }
 
 RowGroup::RowGroup(RowGroupCollection &collection_p, RowGroupPointer pointer)
     : SegmentBase<RowGroup>(pointer.row_start, pointer.tuple_count), collection(collection_p), version_info(nullptr),
+<<<<<<< HEAD
       deletes_is_loaded(false), allocation_size(0), row_id_is_loaded(false), row_number_is_loaded(false),
       has_changes(false) {
+=======
+      deletes_is_loaded(false), allocation_size(0), row_id_is_loaded(false), has_changes(false) {
+>>>>>>> upstream/main
 	// deserialize the columns
 	if (pointer.data_pointers.size() != collection_p.GetTypes().size()) {
 		throw IOException("Row group column count is unaligned with table column count. Corrupt file?");
@@ -55,8 +63,12 @@ RowGroup::RowGroup(RowGroupCollection &collection_p, RowGroupPointer pointer)
 
 RowGroup::RowGroup(RowGroupCollection &collection_p, PersistentRowGroupData &data)
     : SegmentBase<RowGroup>(data.start, data.count), collection(collection_p), version_info(nullptr),
+<<<<<<< HEAD
       deletes_is_loaded(false), allocation_size(0), row_id_is_loaded(false), row_number_is_loaded(false),
       has_changes(false) {
+=======
+      deletes_is_loaded(false), allocation_size(0), row_id_is_loaded(false), has_changes(false) {
+>>>>>>> upstream/main
 	auto &block_manager = GetBlockManager();
 	auto &info = GetTableInfo();
 	auto &types = collection.get().GetTypes();

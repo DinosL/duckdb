@@ -96,7 +96,7 @@ unique_ptr<LogicalOperator> WindowRewriter::Rewrite(unique_ptr<LogicalOperator> 
 	auto types = get.types;
 	auto projection_ids = get.projection_ids;
 
-	column_ids.emplace_back(ColumnIndex(COLUMN_IDENTIFIER_ROW_NUMBER));
+	column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_NUMBER);
 	types.push_back(LogicalType::BIGINT);
 	projection_ids.push_back(column_ids.size() - 1);
 

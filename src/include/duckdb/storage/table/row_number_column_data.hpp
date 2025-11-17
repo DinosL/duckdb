@@ -14,7 +14,7 @@ namespace duckdb {
 
 class RowNumberColumnData : public ColumnData {
 public:
-	RowNumberColumnData(BlockManager &block_manager, DataTableInfo &info, idx_t start_row);
+	RowNumberColumnData(BlockManager &block_manager, DataTableInfo &info);
 
 public:
 	void InitializeScan(ColumnScanState &state) override;

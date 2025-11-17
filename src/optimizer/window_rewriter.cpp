@@ -11,13 +11,8 @@
 namespace duckdb {
 
 bool WindowRewriter::CanOptimize(LogicalOperator &op) {
-	if (op.type == LogicalOperatorType::LOGICAL_PROJECTION) {
-		auto bindings = op.GetColumnBindings();
-		auto break_here = 0;
-	}
 	// If the operator is a window function and its child is a get, check if optimization is possible
 	if (op.type == LogicalOperatorType::LOGICAL_WINDOW) {
-		auto bindings = op.GetColumnBindings();
 		if (op.expressions.size() != 1) {
 			return false;
 		}

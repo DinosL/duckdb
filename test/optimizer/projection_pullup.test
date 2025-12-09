@@ -1,0 +1,33 @@
+# name: test/optimizer/projection_pullup.test
+# description: Test projection Pull Up
+# group: [optimizer]
+
+statement ok
+pragma disable_optimizer
+
+statement ok
+create table t1 as select range a from range(10000);
+
+statement ok
+create table t2 as select range b from range(1000);
+
+statement ok
+create table t3 as select range c from range(100);
+
+statement ok
+create table t4 as select range d from range(10);
+
+statement ok
+pragma enable_optimizer
+
+query IIII
+SELECT * FROM (SELECT a.a + 1 AS newA, b.b + 2 AS newB FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+JOIN (SELECT c.c + 3 AS newC, d.d + 4 AS newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.newA = join34.newC;
+----
+
+# query IIII
+# SELECT * FROM (SELECT a.a + 1 as newA, b.b + 2 FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+# JOIN (SELECT c.c + 3 as newC, d.d + 4 as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.newC;
+# ----
+
+

@@ -38,6 +38,7 @@
 #include "duckdb/optimizer/unnest_rewriter.hpp"
 #include "duckdb/optimizer/late_materialization.hpp"
 #include "duckdb/optimizer/common_subplan_optimizer.hpp"
+#include "duckdb/optimizer/projection_pullup.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/planner.hpp"
 
@@ -184,6 +185,12 @@ void Optimizer::RunBuiltInOptimizers() {
 	RunOptimizer(OptimizerType::EMPTY_RESULT_PULLUP, [&]() {
 		EmptyResultPullup empty_result_pullup;
 		plan = empty_result_pullup.Optimize(std::move(plan));
+	});
+
+	// Pull up projection from joins
+	RunOptimizer(OptimizerType::PROJECTION_PULLUP, [&]() {
+		ProjectionPullup projection_pullup(*this);
+		plan = projection_pullup.Optimize(std::move(plan));
 	});
 
 	// then we perform the join ordering optimization

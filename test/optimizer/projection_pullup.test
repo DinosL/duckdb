@@ -20,14 +20,62 @@ create table t4 as select range d from range(10);
 statement ok
 pragma enable_optimizer
 
-query IIII
-SELECT * FROM (SELECT a.a + 1 AS newA, b.b + 2 AS newB FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
-JOIN (SELECT c.c + 3 AS newC, d.d + 4 AS newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.newA = join34.newC;
-----
-
 # query IIII
-# SELECT * FROM (SELECT a.a + 1 as newA, b.b + 2 FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
-# JOIN (SELECT c.c + 3 as newC, d.d + 4 as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.newC;
+# SELECT * FROM (SELECT a.a + 1 AS newA, b.b + 2 AS newB FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+# JOIN (SELECT c.c + 3 AS newC, d.d + 4 AS newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.newA = join34.newC;
 # ----
+# 3	4	3	4
+# 4	5	4	5
+# 5	6	5	6
+# 6	7	6	7
+# 7	8	7	8
+# 8	9	8	9
+# 9	10	9	10
+# 10	11	10	11
+# 11	12	11	12
+# 12	13	12	13
+
+query II
+explain SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.c;
+----
+0	0	0	0
+1	1	1	1
+2	2	2	2
+3	3	3	3
+4	4	4	4
+5	5	5	5
+6	6	6	6
+7	7	7	7
+8	8	8	8
+9	9	9	9
+
+# query III
+# SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+#   JOIN t3 on join12.a = t3.c LIMIT 5;
+# ----
+# 0	0	0
+# 1	1	1
+# 2	2	2
+# 3	3	3
+# 4	4	4
+
+# query III
+# SELECT * FROM t1 AS join12
+#    JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.c;
+# ----
+# 0	0	0
+# 1	1	1
+# 2	2	2
+# 3	3	3
+# 4	4	4
+# 5	5	5
+# 6	6	6
+# 7	7	7
+# 8	8	8
+# 9	9	9
 
 
+query I
+explain with cte_1 as (select * from t1) select avg(cte_1.a) from cte_1 join t1 on cte_1.a = t1.a;
+----

@@ -24,12 +24,12 @@ public:
 public:
 	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> op);
 	bool CanOptimize(LogicalOperator &op);
-	unique_ptr<LogicalOperator> Pullup(unique_ptr<LogicalOperator> op);
+	unique_ptr<LogicalOperator> Pullup(unique_ptr<LogicalOperator> op, ColumnBindingReplacer &replacer, LogicalOperator *root);
+	unique_ptr<LogicalOperator> RewritePlan(unique_ptr<LogicalOperator> op, ColumnBindingReplacer &replacer, LogicalOperator *root);
 
 private:
 	//! The optimizer
 	Optimizer &optimizer;
-	ColumnBindingReplacer replacer;
 };
 
 } // namespace duckdb

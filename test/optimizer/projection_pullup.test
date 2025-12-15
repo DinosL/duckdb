@@ -6,10 +6,10 @@ statement ok
 pragma disable_optimizer
 
 statement ok
-create table t1 as select range a from range(10000);
+create table t1 as select range a from range(10);
 
 statement ok
-create table t2 as select range b from range(1000);
+create table t2 as select range b from range(10);
 
 statement ok
 create table t3 as select range c from range(100);
@@ -35,8 +35,8 @@ pragma enable_optimizer
 # 11	12	11	12
 # 12	13	12	13
 
-query II
-explain SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+query IIII
+SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
 JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.c;
 ----
 0	0	0	0
@@ -50,32 +50,47 @@ JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON joi
 8	8	8	8
 9	9	9	9
 
-# query III
-# SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
-#   JOIN t3 on join12.a = t3.c LIMIT 5;
-# ----
-# 0	0	0
-# 1	1	1
-# 2	2	2
-# 3	3	3
-# 4	4	4
+# logical_opt	<!REGEX>:.*JOIN.*PROJECTION.*
 
-# query III
-# SELECT * FROM t1 AS join12
-#    JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.c;
-# ----
-# 0	0	0
-# 1	1	1
-# 2	2	2
-# 3	3	3
-# 4	4	4
-# 5	5	5
-# 6	6	6
-# 7	7	7
-# 8	8	8
-# 9	9	9
+
+query III
+SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+  JOIN t3 on join12.a = t3.c LIMIT 5;
+----
+0	0	0
+1	1	1
+2	2	2
+3	3	3
+4	4	4
+
+query III
+SELECT * FROM t1 AS join12
+   JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.c;
+----
+0	0	0
+1	1	1
+2	2	2
+3	3	3
+4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+9	9	9
 
 
 query I
-explain with cte_1 as (select * from t1) select avg(cte_1.a) from cte_1 join t1 on cte_1.a = t1.a;
+with cte_1 as (select * from t1) select * from cte_1 limit 3
 ----
+0
+1
+2
+
+
+query II
+with cte_1 as (select * from t1) select * from cte_1 join t2 on a=b limit 3;
+----
+0	0
+1	1
+2	2
+

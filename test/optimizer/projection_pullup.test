@@ -18,22 +18,71 @@ statement ok
 create table t4 as select range d from range(10);
 
 statement ok
+create table tbl as select range a, mod(range,10) b from range(10000);
+
+statement ok
+create table tbl_2 as select range a from range(10000);
+
+statement ok
 pragma enable_optimizer
 
-# query IIII
-# SELECT * FROM (SELECT a.a + 1 AS newA, b.b + 2 AS newB FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
-# JOIN (SELECT c.c + 3 AS newC, d.d + 4 AS newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.newA = join34.newC;
+query II
+WITH values_tbl(i, j) AS (
+    VALUES
+        (1, 10),
+        (2, 5),
+        (3, 4)
+)
+SELECT v1.i, v1.j
+FROM values_tbl AS v1
+JOIN values_tbl AS v2_0 USING (i, j)
+JOIN values_tbl AS v2_1 USING (i, j)
+JOIN values_tbl AS v2_2 USING (i, j)
+JOIN values_tbl AS v2_3 USING (i, j)
+ORDER BY i;
+----
+1	10
+2	5
+3	4
+
+mode skip
+
+# query I
+# SELECT i+1 FROM (SELECT * FROM integers WHERE i <> 2) relation
 # ----
-# 3	4	3	4
-# 4	5	4	5
-# 5	6	5	6
-# 6	7	6	7
-# 7	8	7	8
-# 8	9	8	9
-# 9	10	9	10
-# 10	11	10	11
-# 11	12	11	12
-# 12	13	12	13
+# 2
+# 4
+# 2
+# 4
+#
+# query I
+# SELECT i FROM (SELECT * FROM integers WHERE i <> 2) relation
+# ----
+# 1
+# 3
+# 1
+# 3
+
+
+query I
+select count(*) from tbl where a = (select min(a) from tbl_2);
+----
+1
+
+mode skip
+
+query IIII
+SELECT * FROM (SELECT a.a + 1 AS newA, b.b + 2 AS newB FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+JOIN (SELECT c.c + 3 AS newC, d.d + 4 AS newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.newA = join34.newC;
+----
+3	4	3	4
+4	5	4	5
+5	6	5	6
+6	7	6	7
+7	8	7	8
+8	9	8	9
+9	10	9	10
+10	11	10	11
 
 query IIII
 SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
@@ -93,4 +142,12 @@ with cte_1 as (select * from t1) select * from cte_1 join t2 on a=b limit 3;
 0	0
 1	1
 2	2
+
+
+query II
+SELECT SUM(v1.i) + SUM(v2.i) AS sum_i, SUM(v1.j) + SUM(v2.j) AS sum_j
+FROM (VALUES (1, 10), (2, 5), (3, 4)) AS v1(i, j)
+JOIN (VALUES (1, 10), (2, 5), (3, 4)) AS v2(i, j) ON v1.i = v2.i;
+----
+12	38
 

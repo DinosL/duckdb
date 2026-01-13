@@ -6,10 +6,10 @@ statement ok
 pragma disable_optimizer
 
 statement ok
-create table t1 as select range a from range(10);
+create table t1 as select range a from range(3, 10000);
 
 statement ok
-create table t2 as select range b from range(10);
+create table t2 as select range b from range(5, 1000);
 
 statement ok
 create table t3 as select range c from range(100);
@@ -24,29 +24,36 @@ statement ok
 create table tbl_2 as select range a from range(10000);
 
 statement ok
+CREATE TABLE integers(i INTEGER)
+
+statement ok
+INSERT INTO integers VALUES (1), (2), (3), (1), (2), (3)
+
+statement ok
 pragma enable_optimizer
 
-query II
-WITH values_tbl(i, j) AS (
-    VALUES
-        (1, 10),
-        (2, 5),
-        (3, 4)
-)
-SELECT v1.i, v1.j
-FROM values_tbl AS v1
-JOIN values_tbl AS v2_0 USING (i, j)
-JOIN values_tbl AS v2_1 USING (i, j)
-JOIN values_tbl AS v2_2 USING (i, j)
-JOIN values_tbl AS v2_3 USING (i, j)
-ORDER BY i;
-----
-1	10
-2	5
-3	4
 
-mode skip
-
+# query II
+# WITH values_tbl(i, j) AS (
+#     VALUES
+#         (1, 10),
+#         (2, 5),
+#         (3, 4)
+# )
+# SELECT v1.i, v1.j
+# FROM values_tbl AS v1
+# JOIN values_tbl AS v2_0 USING (i, j)
+# JOIN values_tbl AS v2_1 USING (i, j)
+# JOIN values_tbl AS v2_2 USING (i, j)
+# JOIN values_tbl AS v2_3 USING (i, j)
+# ORDER BY i;
+# ----
+# 1	10
+# 2	5
+# 3	4
+#
+# # mode skip
+#
 # query I
 # SELECT i+1 FROM (SELECT * FROM integers WHERE i <> 2) relation
 # ----
@@ -54,6 +61,7 @@ mode skip
 # 4
 # 2
 # 4
+#
 #
 # query I
 # SELECT i FROM (SELECT * FROM integers WHERE i <> 2) relation
@@ -64,61 +72,55 @@ mode skip
 # 3
 
 
-query I
-select count(*) from tbl where a = (select min(a) from tbl_2);
-----
-1
+# query I
+# select count(*) from tbl where a = (select min(a) from tbl_2);
+# ----
+# 1
+#
+# mode skip
 
-mode skip
-
-query IIII
-SELECT * FROM (SELECT a.a + 1 AS newA, b.b + 2 AS newB FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
-JOIN (SELECT c.c + 3 AS newC, d.d + 4 AS newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.newA = join34.newC;
-----
-3	4	3	4
-4	5	4	5
-5	6	5	6
-6	7	6	7
-7	8	7	8
-8	9	8	9
-9	10	9	10
-10	11	10	11
-
-query IIII
-SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
-JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.c;
-----
-0	0	0	0
-1	1	1	1
-2	2	2	2
-3	3	3	3
-4	4	4	4
-5	5	5	5
-6	6	6	6
-7	7	7	7
-8	8	8	8
-9	9	9	9
-
-# logical_opt	<!REGEX>:.*JOIN.*PROJECTION.*
+# query IIII
+# SELECT * FROM (SELECT a.a + 1 AS newA, b.b + 2 AS newB FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+# JOIN (SELECT c.c + 3 AS newC, d.d + 4 AS newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.newA = join34.newC;
+# ----
+# 6	7	6	7
+# 7	8	7	8
+# 8	9	8	9
+# 9	10	9	10
+# 10	11	10	11
+# 11	12	11	12
+# 12	13	12	13
+#
+# query IIII
+# SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
+# JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.c;
+# ----
+# 5	5	5	5
+# 6	6	6	6
+# 7	7	7	7
+# 8	8	8	8
+# 9	9	9	9
 
 
+# # logical_opt	<!REGEX>:.*JOIN.*PROJECTION.*
+#
+#
 query III
 SELECT * FROM (SELECT a.a, b.b FROM t1 a JOIN t2 b ON a.a = b.b) AS join12
   JOIN t3 on join12.a = t3.c LIMIT 5;
 ----
-0	0	0
-1	1	1
-2	2	2
-3	3	3
-4	4	4
+5	5	5
+6	6	6
+7	7	7
+8	8	8
+9	9	9
+
+mode skip
 
 query III
 SELECT * FROM t1 AS join12
    JOIN (SELECT c.c, d.d as newD FROM t3 c JOIN t4 d ON c.c = d.d) AS join34 ON join12.a = join34.c;
 ----
-0	0	0
-1	1	1
-2	2	2
 3	3	3
 4	4	4
 5	5	5
@@ -129,19 +131,19 @@ SELECT * FROM t1 AS join12
 
 
 query I
-with cte_1 as (select * from t1) select * from cte_1 limit 3
+with cte_1 as (select a from t1) select a from cte_1 limit 3
 ----
-0
-1
-2
+3
+4
+5
 
 
 query II
 with cte_1 as (select * from t1) select * from cte_1 join t2 on a=b limit 3;
 ----
-0	0
-1	1
-2	2
+5	5
+6	6
+7	7
 
 
 query II

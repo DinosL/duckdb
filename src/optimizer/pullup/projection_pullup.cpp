@@ -1,247 +1,214 @@
 #include "duckdb/optimizer/projection_pullup.hpp"
 
-#include "duckdb/optimizer/optimizer.hpp"
-#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/common/serializer/binary_serializer.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/operator/logical_get.hpp"
 
 namespace duckdb {
 
-ProjectionPullup::ProjectionPullup(Optimizer &optimizer_p) : optimizer(optimizer_p) {
-}
+unique_ptr<LogicalOperator> ProjectionPullup::Optimize(unique_ptr<LogicalOperator> op) {
+	switch (op->type) {
+	// case LogicalOperatorType::LOGICAL_DELIM_JOIN:
+	// case LogicalOperatorType::LOGICAL_ANY_JOIN:
+	// case LogicalOperatorType::LOGICAL_CROSS_PRODUCT:
+	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
+		auto &comp_join = op->Cast<LogicalComparisonJoin>();
+		if (comp_join.join_type == JoinType::MARK) {
+			break; // bail
+		}
 
-bool ProjectionPullup::CanOptimize(LogicalOperator &op) {
+		// We can pull through this operator, add it to the stack
+		parents.push_back(op);
 
-	switch (op.type) {
+		// Recurse
+		for (auto &child : op->children) {
+			child = Optimize(std::move(child));
+		}
+
+		// pop back elements until the last operator in the stack is THIS operator
+		while (!parents.empty() && parents.back().get() != op) {
+			parents.pop_back();
+		}
+		// then pop THIS operator back, and stop
+		if (!parents.empty()) {
+			parents.pop_back();
+		}
+		return op;
+	}
+	case LogicalOperatorType::LOGICAL_DISTINCT:
+	// FIXME: I think we can pull through unnest when the expression in the projection is not referencing the unnested column
+	// should probably add a check
+	case LogicalOperatorType::LOGICAL_UNNEST:
+	case LogicalOperatorType::LOGICAL_FILTER: {
+		// We can pull through this operator, add it to the stack
+		parents.push_back(op);
+
+		// Recurse
+		op->children[0] = Optimize(std::move(op->children[0]));
+
+		// pop back elements until the last operator in the stack is THIS operator
+		while (!parents.empty() && parents.back().get() != op) {
+			parents.pop_back();
+		}
+		// then pop THIS operator back, and stop
+		if (!parents.empty()) {
+			parents.pop_back();
+		}
+		return op;
+	}
+	// FIXME: Cannot pull through these operators. Not sure if this is the best way to handle it
 	case LogicalOperatorType::LOGICAL_WINDOW:
-	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
-		return false;
-	default:
+	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY: {
+		parents.push_back(op);
+
+		op->children[0] = Optimize(std::move(op->children[0]));
+
+		if (!parents.empty() && parents.back().get() == op) {
+			parents.pop_back();
+		}
+		return op;
+	}
+	case LogicalOperatorType::LOGICAL_PROJECTION: {
+		auto &proj = op->Cast<LogicalProjection>();
+		auto proj_bindings = proj.GetColumnBindings();
+
+		// create data structure on projection expressions and output column bindings
+		//	might need column_binding_map_t anyway?
+		column_binding_map_t<unique_ptr<Expression>> projection_map;
+		for (idx_t i = 0; i < proj.expressions.size(); i++) {
+			projection_map[proj_bindings[i]] = proj.expressions[i]->Copy();
+		}
+
+		// loop backwards through parents
+		//		call LogicalOperatorVisitor::EnumerateExpressions on each parent to figure out if you can push through
+		// it
+		// 			if expressions in the projections are colrefs, we can always pull it up
+		//			if it's not a colref, we can pull it up only if it does not appear in the operator enumerate
+		// expressions
+
+		idx_t pullup_idx = parents.size();
+		bool can_pull_through = true;
+		// loop backwards through parents
+		for (idx_t i = parents.size(); i > 0; i--) {
+			idx_t parent_idx = i - 1;
+			can_pull_through = true;
+			auto &parent_op = parents[parent_idx].get();
+
+			if (parent_op->type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
+				can_pull_through = false;
+				pullup_idx = parent_idx + 1;
+				break;
+			}
+
+			// call LogicalOperatorVisitor::EnumerateExpressions on each parent to figure out if you can push through it
+			LogicalOperatorVisitor::EnumerateExpressions(*parent_op, [&](unique_ptr<Expression> *expr) {
+				ExpressionIterator::EnumerateExpression(*expr, [&](unique_ptr<Expression> &child_expr) {
+					if (child_expr->type == ExpressionType::BOUND_COLUMN_REF) {
+						auto &colref = child_expr->Cast<BoundColumnRefExpression>();
+						auto entry = projection_map.find(colref.binding);
+
+						if (entry != projection_map.end()) {
+							// Projection if referenced by parent
+							if (entry->second->type != ExpressionType::BOUND_COLUMN_REF) {
+								// Not a simple column ref, cannot pull through
+								can_pull_through = false;
+							}
+						}
+					}
+				});
+			});
+			if (!can_pull_through) {
+				// Can only pull up to here
+				pullup_idx = parent_idx + 1;
+				break;
+			}
+		}
+
+		// after the loop we figured out how far we can pull it up (under which parent should it be placed?)
+		// now do column binding replacement starting from root, stop_operator = proj.children[0]
+
+		// NOTE: this operator must also be inserted into "parents"
+		// If it gets pulled up, it must be inserted into the correct position into "parents"
+		// Can also write a FIXME for doing this later
+
+		if (pullup_idx > 0) {
+			// now do column binding replacement starting from root, stop_operator = proj.children[0]
+			ColumnBindingReplacer replacer;
+			// Check if ALL expressions are column references
+			bool all_column_refs = true;
+			for (idx_t i = 0; i < proj.expressions.size(); i++) {
+				auto &expr = proj.expressions[i];
+				if (expr->type == ExpressionType::BOUND_COLUMN_REF) {
+					auto &colref = expr->Cast<BoundColumnRefExpression>();
+					// Map the output binding to the input binding
+					replacer.replacement_bindings.emplace_back(proj_bindings[i], colref.binding);
+					// Printer::PrintF("Replacing [%d,%d] with [%d,%d]",proj_bindings[i].table_index, proj_bindings[i].column_index, colref.binding.table_index, colref.binding.column_index);
+				} else {
+					all_column_refs = false;
+					break;
+				}
+			}
+
+			// If all expressions are simple column refs, we can eliminate this projection
+
+			//Maybe this is too aggressive. I should probably check the parent as well
+			if (all_column_refs && can_pull_through) {
+				// We need to replace bindings from pullup_idx to the end of parents
+				// for (idx_t i = pullup_idx; i < parents.size(); i++) {
+				for (idx_t i = 0; i < parents.size(); i++) {
+					auto &parent = parents[i].get();
+
+					// Replace in regular expressions
+					LogicalOperatorVisitor::EnumerateExpressions(
+					    *parent, [&](unique_ptr<Expression> *expr) { replacer.VisitExpression(expr); });
+
+					// replace in join conditions if this is a join
+					if (parent->type == LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
+						auto &join = parent->Cast<LogicalComparisonJoin>();
+						for (auto &condition : join.conditions) {
+							if (condition.IsComparison()) {
+								replacer.VisitExpression(&condition.LeftReference());
+								replacer.VisitExpression(&condition.RightReference());
+							} else {
+								replacer.VisitExpression(&condition.JoinExpressionReference());
+							}
+						}
+					}
+				}
+				// Pull up (remove) this projection
+				auto child = std::move(op->children[0]);
+
+				// recurse on children
+				child = Optimize(std::move(child));
+
+				// Return the child instead of this projection
+				return child;
+			}
+			parents.push_back(op);
+		} else {
+			parents.push_back(op);
+		}
+
+		// Recurse on child
+		op->children[0] = Optimize(std::move(op->children[0]));
+
+		// Clean up parents stack
+		if (!parents.empty() && &parents.back().get() == &op) {
+			parents.pop_back();
+		}
+
+		return op;
+	}
+	default: {
 		break;
 	}
-
-	// return true;
-
-	if (op.children.size()  == 2) {
-		bool is_left_proj = (op.children[0]->type == LogicalOperatorType::LOGICAL_PROJECTION);
-		bool is_right_proj = (op.children[1]->type == LogicalOperatorType::LOGICAL_PROJECTION);
-
-		// If neither side is a projection, nothing to pull up.
-		if (!is_left_proj && !is_right_proj) {
-			return false;
-		}
-
-		//Ensure that projected expressions are not needed by the join conditions
-		if (is_left_proj) {
-			auto &left_proj = op.children[0]->Cast<LogicalProjection>();
-			for (auto &expr : left_proj.expressions) {
-				//TODO: Check if that's enough
-				if (expr->type == ExpressionType::BOUND_FUNCTION)
-					return false;
-			}
-		}
-
-		if (is_right_proj) {
-			auto &right_proj = op.children[1]->Cast<LogicalProjection>();
-			for (auto &expr : right_proj.expressions) {
-				if (expr->type == ExpressionType::BOUND_FUNCTION)
-					return false;
-			}
-		}
 	}
 
-	return true;
-}
-
-unique_ptr<LogicalOperator> ProjectionPullup::Optimize(unique_ptr<LogicalOperator> op) {
-	auto root = op.get();
-	ColumnBindingReplacer replacer;
-	op = RewritePlan(std::move(op), root, replacer, true);
-
-	if (!replacer.replacement_bindings.empty() ) {
-		replacer.VisitOperator(*op);
-	}
-
-	return op;
-}
-
-unique_ptr<LogicalOperator> ProjectionPullup::RewritePlan(unique_ptr<LogicalOperator> op, LogicalOperator *root, ColumnBindingReplacer &replacer, bool is_root) {
-	// first Recurse into children and pull up projections as far as they can go
+	// Create new optimizer for child (start fresh without any state)
 	for (auto &child : op->children) {
-		child = RewritePlan(std::move(child), root, replacer, false);
+		ProjectionPullup next;
+		child = next.Optimize(std::move(child));
 	}
 
-	if (CanOptimize(*op)) {
-		// ColumnBindingReplacer replacer;
-		op =  Pullup(std::move(op), replacer, root);
-		// if (!replacer.replacement_bindings.empty() ) {
-		// 	replacer.VisitOperator(*op);
-		// }
-		return op;
-	}
-
-	// return std::move(op->children[0]);
+	// Also write a FIXME to do a second pass after this is done to combine projections
 	return op;
- }
-
-unique_ptr<LogicalOperator> ProjectionPullup::Pullup(unique_ptr<LogicalOperator> op, ColumnBindingReplacer &new_replacer, LogicalOperator *root) {
-
-
-	switch (op->type) {
-		case LogicalOperatorType::LOGICAL_PROJECTION: {
-			//TODO: It only has one child. Fix
-			for (auto &child : op->children) {
-				if (child->type == LogicalOperatorType::LOGICAL_PROJECTION) {
-					auto &parent_proj = op->Cast<LogicalProjection>();
-					auto &child_proj = child->Cast<LogicalProjection>();
-
-					// TODO: this rule applies to all the operators. Maybe move to CanOptimize
-					for (auto &expr : child_proj.expressions) {
-						if (expr->type == ExpressionType::BOUND_FUNCTION) {
-							return  op;
-						}
-					}
-
-					vector<unique_ptr<Expression>> new_parent_expressions;
-
-					for (auto &expr : parent_proj.expressions) {
-						// if (expr->type == ExpressionType::OPERATOR_CAST) {
-						// 	return op;
-						// }
-						// Case 1: parent expression is a column reference
-						if (expr->type == ExpressionType::BOUND_COLUMN_REF) {
-							auto &parent_colref = expr->Cast<BoundColumnRefExpression>();
-
-							idx_t child_idx = parent_colref.binding.column_index;
-
-							// Replace parent expression with child expression
-							expr = child_proj.expressions[child_idx]->Copy();
-							continue;
-						}
-
-						// Case 2: parent expression is a bound function
-						ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-							if (child->type != ExpressionType::BOUND_COLUMN_REF) {
-								return;
-							}
-
-							auto &colref = child->Cast<BoundColumnRefExpression>();
-							idx_t child_idx = colref.binding.column_index;
-
-							// Replace the column ref with the child expression
-							child = child_proj.expressions[child_idx]->Copy();
-						});
-					}
-
-					// Remove the child projection
-					parent_proj.children[0] = std::move(child_proj.children[0]);
-				}
-			}
-			break;
-		}
-	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
-		auto &join = op->Cast<LogicalJoin>();
-
-		bool is_left_proj = (join.children[0]->type == LogicalOperatorType::LOGICAL_PROJECTION);
-		bool is_right_proj = (join.children[1]->type == LogicalOperatorType::LOGICAL_PROJECTION);
-
-		// vector<unique_ptr<Expression>> merged_expressions;
-		vector<ColumnBinding> new_bindings;
-		vector<ColumnBinding> old_bindings;
-
-		if (is_left_proj) {
-			auto &left_proj = join.children[0]->Cast<LogicalProjection>();
-			for (auto &expr : left_proj.expressions) {
-				// TODO: Check join expression and only skip if expression in join condition is bound_func
-				if (expr->type == ExpressionType::BOUND_FUNCTION || expr->type == ExpressionType::CASE_EXPR)
-					return op;
-			}
-
-			// After removing the projection we need to make sure that the join operator points to whatever the projection was pointing at
-			for (auto &child : left_proj.children) {
-				auto child_bindings = child->GetColumnBindings();
-				for (auto &binding : child_bindings) {
-					// Printer::PrintF("Left Bind %d,%d", binding.table_index, binding.column_index);
-					new_bindings.push_back(binding);
-				}
-			}
-
-			auto left_bindings = left_proj.GetColumnBindings();
-			// for (auto &binding : left_bindings) {
-			// 	Printer::PrintF("Left Bind %d,%d", binding.table_index, binding.column_index);
-			// }
-			old_bindings.insert(old_bindings.end(), left_bindings.begin(), left_bindings.end());
-
-			// Extract the child and replace join's inputs with the underlying operators
-			auto left_child = std::move(left_proj.children[0]);
-			join.children[0] = std::move(left_child);
-		}
-		else {
-			// No projection to pullup, just pass the bindings to the new projection
-			auto &left_child = *join.children[0];
-			auto left_bindings = left_child.GetColumnBindings();
-
-			for (auto &b : left_bindings) {
-				Printer::PrintF("Left bind %d, %d", b.table_index, b.column_index);
-				new_bindings.push_back(b);
-				old_bindings.push_back(b);
-			}
-		}
-
-		if (is_right_proj) {
-			auto &right_proj = join.children[1]->Cast<LogicalProjection>();
-			for (auto &expr : right_proj.expressions) {
-				if (expr->type == ExpressionType::BOUND_FUNCTION || expr->type == ExpressionType::CASE_EXPR) {
-					return op;
-				}
-			}
-
-			// After removing the projection we need to make sure that the join operator points to whatever the projection was pointing at
-			//TODO: one child here as well. Simplify
-			for (auto &child : right_proj.children) {
-				auto child_bindings = child->GetColumnBindings();
-				auto sz = child_bindings.size();
-				for (auto &binding : child_bindings) {
-					Printer::PrintF("Right Bind %d,%d", binding.table_index, binding.column_index);
-					new_bindings.push_back(binding);
-				}
-			}
-
-			auto right_bindings = right_proj.GetColumnBindings();
-			old_bindings.insert(old_bindings.end(), right_bindings.begin(), right_bindings.end());
-
-			// Extract the child and replace join's inputs with the underlying operators
-			auto right_child = std::move(right_proj.children[0]);
-			join.children[1] = std::move(right_child);
-		}
-		else {
-			// No projection to pullup, just pass the bindings to the new projection
-			auto &right_child = *join.children[1];
-			auto right_bindings = right_child.GetColumnBindings();
-
-			for (auto &b : right_bindings) {
-				new_bindings.push_back(b);
-				old_bindings.push_back(b);
-			}
-		}
-
-		D_ASSERT(old_bindings.size() == new_bindings.size());
-		for (idx_t i = 0; i < old_bindings.size(); i++) {
-			new_replacer.replacement_bindings.emplace_back(old_bindings[i], new_bindings[i]);
-			// Printer::PrintF("Replacing %d, %d with %d, %d", old_bindings[i].table_index, old_bindings[i].column_index, new_bindings[i].table_index, new_bindings[i].column_index);
-		}
-
-		auto &right_inner_join = join.children[1]->Cast<LogicalJoin>();
-		new_replacer.stop_operator = &right_inner_join;
-
-		return op;
-
-		}
-	default: break;
-	}
-
-	return  op;
 }
-
 } // namespace duckdb

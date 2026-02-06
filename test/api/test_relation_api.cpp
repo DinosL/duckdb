@@ -14,7 +14,7 @@ using namespace std;
 TEST_CASE("Test simple relation API", "[relation_api]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// con.EnableQueryVerification();
+	con.EnableQueryVerification();
 	duckdb::unique_ptr<QueryResult> result;
 	duckdb::shared_ptr<Relation> tbl, filter, proj, proj2, v1, v2, v3;
 
@@ -285,7 +285,7 @@ TEST_CASE("Test combinations of set operations", "[relation_api]") {
 TEST_CASE("Test combinations of joins", "[relation_api]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// con.EnableQueryVerification();
+	con.EnableQueryVerification();
 	duckdb::unique_ptr<QueryResult> result;
 	duckdb::shared_ptr<Relation> values, vjoin;
 
@@ -338,7 +338,7 @@ TEST_CASE("Test combinations of joins", "[relation_api]") {
 	// do a bunch of joins in a loop
 	auto v1tmp = v1;
 	auto v2tmp = v2;
-	for (idx_t i = 0; i < 2; i++) {
+	for (idx_t i = 0; i < 4; i++) {
 		REQUIRE_NOTHROW(v1tmp = v1tmp->Join(v2tmp->Alias(to_string(i)), "i, j"));
 	}
 	REQUIRE_NOTHROW(result = v1tmp->Order("i")->Execute());
@@ -902,21 +902,21 @@ TEST_CASE("Test view relations", "[relation_api]") {
 TEST_CASE("Test table function relations", "[relation_api]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// con.EnableQueryVerification();
+	con.EnableQueryVerification();
 	duckdb::unique_ptr<QueryResult> result;
 
 	REQUIRE_NO_FAIL(con.Query("CREATE TABLE integers(i INTEGER)"));
 
 	auto i1 = con.TableFunction("duckdb_tables");
 	result = i1->Execute();
-	// REQUIRE(CHECK_COLUMN(result, 2, {"main"}));
-	//
-	// // function with parameters
+	REQUIRE(CHECK_COLUMN(result, 2, {"main"}));
+
+	// function with parameters
 	auto i2 = con.TableFunction("pragma_table_info", {"integers"});
 	result = i2->Execute();
-	// REQUIRE(CHECK_COLUMN(result, 0, {0}));
-	// REQUIRE(CHECK_COLUMN(result, 1, {"i"}));
-	// REQUIRE(CHECK_COLUMN(result, 2, {"INTEGER"}));
+	REQUIRE(CHECK_COLUMN(result, 0, {0}));
+	REQUIRE(CHECK_COLUMN(result, 1, {"i"}));
+	REQUIRE(CHECK_COLUMN(result, 2, {"INTEGER"}));
 
 	// we can do ops on table functions
 	result = i2->Filter("cid=0")->Project("concat(name, ' ', type), length(name), reverse(lower(type))")->Execute();
@@ -924,15 +924,15 @@ TEST_CASE("Test table function relations", "[relation_api]") {
 	REQUIRE(CHECK_COLUMN(result, 1, {1}));
 	REQUIRE(CHECK_COLUMN(result, 2, {"regetni"}));
 
-	// // table function that takes a relation as input
-	// auto values = con.Values("(42)", {"i"});
-	// auto summary = values->TableFunction("summary", duckdb::vector<Value> {});
-	// result = summary->Execute();
-	// REQUIRE(CHECK_COLUMN(result, 0, {"[42]"}));
-	// REQUIRE(CHECK_COLUMN(result, 1, {"42"}));
-	//
-	// // non-existant table function
-	// REQUIRE_THROWS(con.TableFunction("blabla"));
+	// table function that takes a relation as input
+	auto values = con.Values("(42)", {"i"});
+	auto summary = values->TableFunction("summary", duckdb::vector<Value> {});
+	result = summary->Execute();
+	REQUIRE(CHECK_COLUMN(result, 0, {"[42]"}));
+	REQUIRE(CHECK_COLUMN(result, 1, {"42"}));
+
+	// non-existant table function
+	REQUIRE_THROWS(con.TableFunction("blabla"));
 }
 
 TEST_CASE("Test CSV Relation with union by name", "[relation_api]") {
@@ -1042,22 +1042,22 @@ TEST_CASE("Test Relation Pending Query API", "[relation_api]") {
 	DuckDB db;
 	Connection con(db);
 
-	// SECTION("Materialized result") {
-	// 	auto tbl = con.TableFunction("range", {Value(1000000)});
-	// 	auto aggr = tbl->Aggregate("SUM(range)");
-	// 	auto pending_query = con.context->PendingQuery(aggr, false);
-	// 	REQUIRE(!pending_query->HasError());
-	// 	auto result = pending_query->Execute();
-	// 	REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(499999500000)}));
-	//
-	// 	// cannot fetch twice from the same pending query
-	// 	REQUIRE_THROWS(pending_query->Execute());
-	// 	REQUIRE_THROWS(pending_query->Execute());
-	//
-	// 	// query the connection as normal after
-	// 	result = con.Query("SELECT 42");
-	// 	REQUIRE(CHECK_COLUMN(result, 0, {42}));
-	// }
+	SECTION("Materialized result") {
+		auto tbl = con.TableFunction("range", {Value(1000000)});
+		auto aggr = tbl->Aggregate("SUM(range)");
+		auto pending_query = con.context->PendingQuery(aggr, false);
+		REQUIRE(!pending_query->HasError());
+		auto result = pending_query->Execute();
+		REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(499999500000)}));
+
+		// cannot fetch twice from the same pending query
+		REQUIRE_THROWS(pending_query->Execute());
+		REQUIRE_THROWS(pending_query->Execute());
+
+		// query the connection as normal after
+		result = con.Query("SELECT 42");
+		REQUIRE(CHECK_COLUMN(result, 0, {42}));
+	}
 	SECTION("Runtime error in pending query (materialized)") {
 		auto tbl = con.TableFunction("range", {Value(1000000)});
 		auto aggr = tbl->Aggregate("SUM(range) AS s")->Project("concat(s::varchar, 'hello')::int");

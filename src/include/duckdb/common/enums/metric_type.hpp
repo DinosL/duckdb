@@ -131,7 +131,6 @@ public:
 
 	static constexpr uint8_t START_OPTIMIZER = static_cast<uint8_t>(MetricType::OPTIMIZER_EXPRESSION_REWRITER);
 	static constexpr uint8_t END_OPTIMIZER = static_cast<uint8_t>(MetricType::OPTIMIZER_WINDOW_SELF_JOIN);
-	static constexpr uint8_t END_OPTIMIZER = static_cast<uint8_t>(MetricType::OPTIMIZER_PROJECTION_PULLUP);
 
 	static constexpr uint8_t START_PHASE_TIMING = static_cast<uint8_t>(MetricType::ALL_OPTIMIZERS);
 	static constexpr uint8_t END_PHASE_TIMING = static_cast<uint8_t>(MetricType::PLANNER_BINDING);

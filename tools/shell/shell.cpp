@@ -410,7 +410,7 @@ ShellState::ShellState() : seenInterrupt(0), program_name("duckdb") {
 	    "(e.g. duckdb -unsigned).");
 	nullValue = "NULL";
 	strcpy(continuePrompt, "  ");
-	strcpy(continuePromptSelected, "‣ ");
+	strcpy(continuePromptSelected, "  ");
 	strcpy(scrollUpPrompt, "⇡ ");
 	strcpy(scrollDownPrompt, "⇣ ");
 }
@@ -786,10 +786,12 @@ string ShellState::EscapeCString(const string &str) {
 	return result;
 }
 
+extern "C" {
+
 /*
 ** This routine runs when the user presses Ctrl-C
 */
-static void interrupt_handler(int NotUsed) {
+static void InterruptHandler(int NotUsed) {
 	UNUSED_PARAMETER(NotUsed);
 	auto &state = ShellState::Get();
 	state.seenInterrupt++;
@@ -800,6 +802,7 @@ static void interrupt_handler(int NotUsed) {
 		state.conn->Interrupt();
 	}
 }
+}
 
 #if (defined(_WIN32) || defined(WIN32)) && !defined(_WIN32_WCE)
 /*
@@ -808,12 +811,19 @@ static void interrupt_handler(int NotUsed) {
 static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType /* One of the CTRL_*_EVENT constants */
 ) {
 	if (dwCtrlType == CTRL_C_EVENT) {
-		interrupt_handler(0);
+		InterruptHandler(0);
 		return TRUE;
 	}
 	return FALSE;
 }
 #endif
+
+void ShellState::ClearInterrupt() {
+	seenInterrupt = 0;
+	if (conn) {
+		conn->context->ClearInterrupt();
+	}
+}
 
 string ShellState::GetSchemaLine(const string &str, const string &tail) {
 	return str + tail;
@@ -834,14 +844,14 @@ void ShellState::SetTextMode() {
 	setTextMode(out, 1);
 }
 
-SuccessState ShellState::RenderQuery(ShellRenderer &renderer, const string &query) {
+SuccessState ShellState::RenderQuery(ShellRenderer &renderer, const string &query, PagerMode pager_overwrite) {
 	auto &con = *conn;
 	auto result = con.SendQuery(query);
 	if (result->HasError()) {
 		PrintDatabaseError(result->GetError());
 		return SuccessState::FAILURE;
 	}
-	return RenderQueryResult(renderer, *result);
+	return RenderQueryResult(renderer, *result, pager_overwrite);
 }
 
 /*
@@ -966,20 +976,7 @@ SuccessState ShellState::ExecuteStatement(unique_ptr<duckdb::SQLStatement> state
 		last_result = duckdb::unique_ptr_cast<duckdb::QueryResult, MaterializedQueryResult>(std::move(result));
 	}
 	// analyze the query result so we know how long/wide the result will be
-	RenderingQueryResult render_result(res, *renderer);
-	renderer->Analyze(render_result);
-	if (seenInterrupt) {
-		return SuccessState::FAILURE;
-	}
-
-	// check if we need to use the pager for the rendering
-	unique_ptr<PagerState> pager_setup;
-	if (ShouldUsePager(*renderer, render_result)) {
-		pager_setup = SetupPager();
-	}
-	// render the query result
-	PrintStream print_stream(*this);
-	return renderer->RenderQueryResult(print_stream, *this, render_result);
+	return RenderQueryResult(*renderer, res);
 }
 
 /*
@@ -1183,6 +1180,7 @@ void ShellState::OpenDB(ShellOpenFlags flags) {
 		db->LoadStaticExtension<duckdb::ShellExtension>();
 		if (safe_mode) {
 			ExecuteQuery("SET enable_external_access=false");
+			ExecuteQuery("SET lock_configuration=true");
 		}
 		if (stdout_is_console) {
 			ExecuteQuery("PRAGMA enable_progress_bar");
@@ -1393,20 +1391,11 @@ bool ShellState::ShouldUsePager(ShellRenderer &renderer, RenderingQueryResult &r
 	return renderer.ShouldUsePager(result, pager_mode);
 }
 
-extern "C" {
-
-void HandlePagerExit(int sig) {
-	// Pager is gone; interrupt the process to stop printing
-	auto &state = ShellState::Get();
-	++state.seenInterrupt;
-}
-}
-
 void ShellState::StartPagerDisplay() {
 #if !defined(_WIN32) && !defined(WIN32)
 	// turn sigpipe trap into an interrupt while displaying the pager
 	// this allows us to interrupt display after the pager is exited by the user
-	signal(SIGPIPE, HandlePagerExit);
+	signal(SIGPIPE, InterruptHandler);
 #endif
 }
 
@@ -1466,7 +1455,7 @@ void ShellState::ResetOutput() {
 				PrintF(PrintOutput::STDERR, "Failed: [%s]\n", zCmd.c_str());
 			} else {
 				/* Give the start/open/xdg-open command some time to get
-				** going before we continue, and potential delete the
+				** going before we continue, and potentially delete the
 				** zTempFile data file out from under it */
 				Sleep(2000);
 			}
@@ -1576,6 +1565,7 @@ MetadataResult ShellState::EnableSafeMode(ShellState &state, const vector<string
 	if (state.db) {
 		// db has been opened - disable external access
 		state.ExecuteQuery("SET enable_external_access=false");
+		state.ExecuteQuery("SET lock_configuration=true");
 	}
 	return MetadataResult::SUCCESS;
 }
@@ -1743,7 +1733,7 @@ bool ShellState::ImportData(const vector<string> &args) {
 	if (function == "read_csv" && generic_parameters.find("ignore_errors") == generic_parameters.end()) {
 		generic_parameters["ignore_errors"] = "true";
 	}
-	seenInterrupt = 0;
+	ClearInterrupt();
 	// check if the table exists
 	auto &con = *conn;
 	auto needCommit = con.context->transaction.IsAutoCommit();
@@ -2094,7 +2084,7 @@ bool ShellState::DisplaySchemas(const vector<string> &args) {
 	if (bDebug) {
 		PrintF("SQL: %s;\n", sSelect.c_str());
 	} else {
-		rc = RenderQuery(*renderer, sSelect);
+		rc = RenderQuery(*renderer, sSelect, PagerMode::PAGER_OFF);
 	}
 	if (rc == SuccessState::FAILURE) {
 		PrintF(PrintOutput::STDERR, "Error: querying schema information\n");
@@ -2459,7 +2449,7 @@ int ShellState::DoMetaCommand(const string &zLine) {
 				PrintF(PrintOutput::STDERR, "Command \"%s\" is unsupported in the current version of the CLI\n",
 				       command.command);
 				result = MetadataResult::FAIL;
-			} else if (command.argument_count == 0 || int(command.argument_count) == args.size()) {
+			} else if (command.argument_count == 0 || command.argument_count == args.size()) {
 				result = command.callback(*this, args);
 			}
 			if (result == MetadataResult::PRINT_USAGE) {
@@ -2743,7 +2733,7 @@ int ShellState::RunOneSqlLine(InputMode mode, char *zSql) {
 
 /*
 ** Read input from *in and process it.  If *in==0 then input
-** is interactive - the user is typing it it.  Otherwise, input
+** is interactive - the user is typing it in.  Otherwise, input
 ** is coming from a file or device.  A prompt is issued and history
 ** is saved only if input is interactive.  An interrupt signal will
 ** cause this routine to exit immediately, unless input is interactive.
@@ -2778,7 +2768,7 @@ int ShellState::ProcessInput(InputMode mode) {
 			if (in) {
 				break;
 			}
-			seenInterrupt = 0;
+			ClearInterrupt();
 		}
 		if (*zLine == '\3') {
 			// ctrl c: reset sql statement
@@ -3038,7 +3028,7 @@ void ShellState::DetectDarkLightMode() {
 		// highlight mode is specified by the user - avoid setting manually
 		return;
 	}
-	if (!stdout_is_console && !stderr_is_console) {
+	if (!stdout_is_console) {
 		// not printing to console - don't auto-detect
 		return;
 	}
@@ -3095,7 +3085,7 @@ int wmain(int argc, wchar_t **wargv) {
 	** else is done.
 	*/
 #ifdef SIGINT
-	signal(SIGINT, interrupt_handler);
+	signal(SIGINT, InterruptHandler);
 #elif (defined(_WIN32) || defined(WIN32)) && !defined(_WIN32_WCE)
 	SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 #endif
@@ -3112,7 +3102,7 @@ int wmain(int argc, wchar_t **wargv) {
 			if (data.zDbFilename.empty()) {
 				data.zDbFilename = z;
 			} else {
-				/* Excesss arguments are interpreted as SQL (or dot-commands) and
+				/* Excess arguments are interpreted as SQL (or dot-commands) and
 				** mean that nothing is read from stdin */
 				data.readStdin = false;
 				data.stdin_is_interactive = false;
@@ -3169,7 +3159,7 @@ int wmain(int argc, wchar_t **wargv) {
 	data.OpenDB();
 
 	/* Process the initialization file if there is one.  If no -init option
-	** is given on the command line, look for a file named ~/.sqliterc and
+	** is given on the command line, look for a file named ~/.duckdbrc and
 	** try to process it.
 	*/
 	if (!data.ProcessDuckDBRC(data.initFile.empty() ? nullptr : data.initFile.c_str()) && data.bail_on_error) {

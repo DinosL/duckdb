@@ -48,6 +48,8 @@ enum class OptimizerType : uint32_t {
 	COMMON_SUBPLAN,
 	JOIN_ELIMINATION,
 	PROJECTION_PULLUP
+	JOIN_ELIMINATION,
+	WINDOW_SELF_JOIN
 };
 
 string OptimizerTypeToString(OptimizerType type);

@@ -35,6 +35,7 @@ pragma enable_optimizer
 statement ok
 PRAGMA explain_output = OPTIMIZED_ONLY;
 
+# These optimizers introduce projections. I disable them for now
 statement ok
 PRAGMA disabled_optimizers = 'column_lifetime,statistics_propagation'
 
@@ -55,7 +56,6 @@ query II
 explain SELECT * FROM (SELECT CASE WHEN a > 5 THEN a ELSE 0 END as x FROM t1) subq JOIN t2 ON subq.x = t2.b;
 ----
 logical_opt	<REGEX>:.*JOIN.*PROJECTION.*
-
 
 # not column_refs. Cannot pull up
 query II
@@ -89,7 +89,6 @@ query II
 explain with cte_1 as (select a from t1) select a from cte_1 limit 3
 ----
 logical_opt	<!REGEX>:.*PROJECTION.*PROJECTION.*
-
 
 query II
 explain with cte_1 as (select * from t1) select * from cte_1 join t2 on a=b limit 3;

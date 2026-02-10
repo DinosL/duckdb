@@ -49,7 +49,7 @@ logical_opt	<REGEX>:.*JOIN.*PROJECTION.*
 query II
 explain SELECT a, SUM(b) AS sum_b FROM (SELECT a, b FROM tbl WHERE b > 0) GROUP BY a;
 ----
-logical_opt	<REGEX>:.*AGGREGATE.*PROJECTION.*
+logical_opt	<REGEX>:.*PROJECTION.*AGGREGATE.*
 
 # Projection with case. Cannot pull up
 query II

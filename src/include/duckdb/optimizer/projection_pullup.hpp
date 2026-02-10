@@ -26,7 +26,6 @@ public:
 
 private:
 	vector<reference<unique_ptr<LogicalOperator>>> parents;
-	bool blocking_operator = false;
 };
 
 } // namespace duckdb

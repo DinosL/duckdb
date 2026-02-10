@@ -2,15 +2,11 @@
 
 #include "duckdb/common/printer.hpp"
 #include "duckdb/common/serializer/binary_serializer.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
 
 namespace duckdb {
 
 unique_ptr<LogicalOperator> ProjectionPullup::Optimize(unique_ptr<LogicalOperator> op) {
-	// for (idx_t i = 0; i < parents.size(); i++) {
-	// 	auto &op = parents[i];
-	// 	Printer::PrintF("%s, ", op.get()->GetName());
-	// }
-	// Printer::PrintF("\n");
 	switch (op->type) {
 	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
 		auto &comp_join = op->Cast<LogicalComparisonJoin>();
@@ -36,8 +32,6 @@ unique_ptr<LogicalOperator> ProjectionPullup::Optimize(unique_ptr<LogicalOperato
 		}
 		return op;
 	}
-	// FIXME: OPT I think we can pull through unnest when the expression in the projection is not referencing the
-	// unnested column LogicalOperatorType::LOGICAL_UNNEST:
 	case LogicalOperatorType::LOGICAL_FILTER: {
 		// We can pull through this operator, add it to the stack
 		parents.push_back(op);
@@ -55,34 +49,25 @@ unique_ptr<LogicalOperator> ProjectionPullup::Optimize(unique_ptr<LogicalOperato
 		}
 		return op;
 	}
-	// FIXME: Cannot pull through these operators. Not sure if this is the best way to handle it.
-	// I push them to the parents, so later when I find a projection I can
+	// Cannot pull through these operators. Start a new optimizer from here or
 	case LogicalOperatorType::LOGICAL_WINDOW:
-	// FIXME: not sure what to do about delim_join. Problem is that the optimizer is pulling a column reference through
-	// a DELIM_JOIN
 	case LogicalOperatorType::LOGICAL_DELIM_JOIN:
+	case LogicalOperatorType::LOGICAL_DISTINCT:
 	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY: {
-		bool old = blocking_operator;
-		blocking_operator = true;
+		for (auto &child : op->children) {
+			ProjectionPullup next;
+			next.parents.push_back(op);
+			child = next.Optimize(std::move(child));
+		}
 
-		op->children[0] = Optimize(std::move(op->children[0]));
-
-		blocking_operator = old;
 		return op;
 	}
 	case LogicalOperatorType::LOGICAL_PROJECTION: {
-		if (blocking_operator) {
-			// Projection is below a blocking operator must not be removed
-			parents.push_back(op);
-			op->children[0] = Optimize(std::move(op->children[0]));
-			parents.pop_back();
-			return op;
-		}
 		auto &proj = op->Cast<LogicalProjection>();
 		auto proj_bindings = proj.GetColumnBindings();
 
-		// create data structure on projection expressions and output column bindings
-		// might need column_binding_map_t anyway?
+		// FIXME: no need to do the next two blocks if parents.size == 0. That happens only when we start the
+		// optimization. Add a check
 		column_binding_map_t<unique_ptr<Expression>> projection_map;
 		for (idx_t i = 0; i < proj.expressions.size(); i++) {
 			projection_map[proj_bindings[i]] = proj.expressions[i]->Copy();
@@ -103,9 +88,18 @@ unique_ptr<LogicalOperator> ProjectionPullup::Optimize(unique_ptr<LogicalOperato
 		// if expressions in the projections are colrefs, we can always pull it up
 		// if it's not a colref, we can pull it up only if it does not appear in the operator enumerate expressions
 		idx_t pull_up_to_here = parents.size();
+		bool has_blocking_operator = false;
 		for (idx_t i = parents.size(); i > 0; i--) {
 			idx_t parent_idx = i - 1;
 			auto &parent_op = parents[parent_idx].get();
+			if (parent_op->type == LogicalOperatorType::LOGICAL_DELIM_JOIN ||
+			    parent_op->type == LogicalOperatorType::LOGICAL_WINDOW ||
+			    parent_op->type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY ||
+			    parent_op->type == LogicalOperatorType::LOGICAL_DISTINCT) {
+				pull_up_to_here = parent_idx + 1;
+				has_blocking_operator = true;
+				break;
+			}
 			bool can_pull_through = true;
 
 			LogicalOperatorVisitor::EnumerateExpressions(*parent_op, [&](unique_ptr<Expression> *expr) {
@@ -135,7 +129,7 @@ unique_ptr<LogicalOperator> ProjectionPullup::Optimize(unique_ptr<LogicalOperato
 		// now do column binding replacement starting from root, stop_operator = proj.children[0]
 
 		// If we can pull up, replace bindings along parents and remove this projection
-		if (pull_up_to_here > 0 && all_column_refs) {
+		if (!has_blocking_operator && pull_up_to_here > 0 && all_column_refs) {
 			ColumnBindingReplacer replacer;
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {
 				auto &colref = proj.expressions[i]->Cast<BoundColumnRefExpression>();
@@ -169,7 +163,9 @@ unique_ptr<LogicalOperator> ProjectionPullup::Optimize(unique_ptr<LogicalOperato
 			// Remove this projection
 			auto child = std::move(op->children[0]);
 
-			// recurse on children
+			// Re-run optimization after removing this projection.
+			// Binding rewrites can make parent projections redundant, and without
+			// another pass they would not be eliminated.
 			child = Optimize(std::move(child));
 
 			// Return the child instead of this projection

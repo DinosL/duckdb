@@ -1,31 +1,25 @@
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// duckdb/optimizer/projection_pullup.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
 #pragma once
 
 #include "column_binding_replacer.hpp"
 #include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/common/serializer/binary_serializer.hpp"
 
 namespace duckdb {
 
 class Optimizer;
 class LogicalOperator;
 
-//! The ProjectionPullup optimizer pulls up projections from joins
 class ProjectionPullup {
 public:
-	explicit ProjectionPullup() {};
+	explicit ProjectionPullup(LogicalOperator &root) : root(root) {
+	}
 
-public:
-	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> op);
+	void Optimize(unique_ptr<LogicalOperator> &op);
+	void PopParents(const LogicalOperator &op);
 
 private:
-	vector<reference<unique_ptr<LogicalOperator>>> parents;
+	LogicalOperator &root;
+	std::vector<LogicalOperator *> parents;
 };
 
 } // namespace duckdb

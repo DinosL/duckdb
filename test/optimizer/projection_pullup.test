@@ -30,6 +30,21 @@ statement ok
 INSERT INTO integers VALUES (1), (2), (3), (1), (2), (3)
 
 statement ok
+CREATE TABLE tbl1(i INTEGER, payload INTEGER);
+
+statement ok
+CREATE TABLE tbl2(i INTEGER);
+
+statement ok
+INSERT INTO tbl1 SELECT i, i FROM range(0, 1000000) tbl(i);
+
+statement ok
+INSERT INTO tbl2 VALUES (7);
+
+statement ok
+CREATE VIEW v_tbl1 AS SELECT i, payload FROM tbl1;
+
+statement ok
 pragma enable_optimizer
 
 statement ok
@@ -96,9 +111,16 @@ explain with cte_1 as (select * from t1) select * from cte_1 join t2 on a=b limi
 logical_opt	<!REGEX>:.*JOIN.*PROJECTION.*
 
 query II
-SELECT SUM(v1.i) + SUM(v2.i) AS sum_i, SUM(v1.j) + SUM(v2.j) AS sum_j
+explain SELECT SUM(v1.i) + SUM(v2.i) AS sum_i, SUM(v1.j) + SUM(v2.j) AS sum_j
 FROM (VALUES (1, 10), (2, 5), (3, 4)) AS v1(i, j)
 JOIN (VALUES (1, 10), (2, 5), (3, 4)) AS v2(i, j) ON v1.i = v2.i;
 ----
-12	38
+logical_opt	<!REGEX>:.*AGGREGATION.*JOIN.*PROJECTION.*
+
+# mode skip
+#
+#
+# query II
+# EXPLAIN SELECT * FROM v_tbl1 JOIN tbl2 ON v_tbl1.i = tbl2.i;
+# ----
 

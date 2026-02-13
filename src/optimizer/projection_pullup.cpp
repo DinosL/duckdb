@@ -8,7 +8,7 @@ namespace duckdb {
 
 void ProjectionPullup::PopParents(const LogicalOperator &op) {
 	// pop back elements until the last operator in the stack is THIS operator
-	while (!parents.empty() && parents.back() != &op) {
+	while (!parents.empty() && &parents.back().get() != &op) {
 		parents.pop_back();
 	}
 	// then pop THIS operator back, and stop
@@ -27,7 +27,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		}
 
 		// We can pull through this operator, add it to the stack
-		parents.push_back(op.get());
+		parents.push_back(*op);
 
 		// Recurse
 		for (auto &child : op->children) {
@@ -39,7 +39,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 	}
 	case LogicalOperatorType::LOGICAL_FILTER: {
 		// We can pull through this operator, add it to the stack
-		parents.push_back(op.get());
+		parents.push_back(*op);
 
 		// Recurse
 		Optimize(op->children[0]);
@@ -51,8 +51,6 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		auto &proj = op->Cast<LogicalProjection>();
 		auto proj_bindings = proj.GetColumnBindings();
 
-		// FIXME: no need to do the next two blocks if parents.size == 0. That happens only when we start the
-		// optimization. Add a check
 		// Check if all expressions are simple column refs
 		// Cannot pull this projection up safely if any expression is not a column ref
 		bool all_column_refs = true;
@@ -74,7 +72,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			auto &parent_op = parents[parent_idx];
 			bool can_pull_through = true;
 
-			LogicalOperatorVisitor::EnumerateExpressions(*parent_op, [&](unique_ptr<Expression> *expr) {
+			LogicalOperatorVisitor::EnumerateExpressions(parent_op, [&](unique_ptr<Expression> *expr) {
 				ExpressionIterator::EnumerateExpression(*expr, [&](unique_ptr<Expression> &child_expr) {
 					if (child_expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 						auto &colref = child_expr->Cast<BoundColumnRefExpression>();
@@ -121,13 +119,13 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		}
 
 		// If we cannot pull up, push this projection to parents stack
-		parents.push_back(op.get());
+		parents.push_back(*op);
 
 		// Recurse on child
 		Optimize(op->children[0]);
 
 		// Clean up parents stack
-		if (!parents.empty() && parents.back() == op.get()) {
+		if (!parents.empty() && &parents.back().get() == op.get()) {
 			parents.pop_back();
 		}
 

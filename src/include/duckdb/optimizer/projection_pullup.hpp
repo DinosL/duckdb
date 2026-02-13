@@ -1,8 +1,6 @@
 #pragma once
 
-#include "column_binding_replacer.hpp"
 #include "duckdb/planner/logical_operator.hpp"
-#include "duckdb/common/serializer/binary_serializer.hpp"
 
 namespace duckdb {
 
@@ -19,7 +17,7 @@ public:
 
 private:
 	LogicalOperator &root;
-	std::vector<LogicalOperator *> parents;
+	vector<reference<LogicalOperator>> parents;
 };
 
 } // namespace duckdb

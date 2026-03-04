@@ -10,7 +10,7 @@ namespace duckdb {
 
 void ProjectionPullup::PopParents(const LogicalOperator &op) {
 	// pop back elements until the last operator in the stack is THIS operator
-	while (!parents.empty() && &parents.back().get() != &op) {
+	while (!parents.empty() && parents.back().get().get() != &op) {
 		parents.pop_back();
 	}
 	// then pop THIS operator back, and stop
@@ -60,6 +60,11 @@ void ProjectionPullup::InsertProjectionBelowOp(unique_ptr<LogicalOperator> &op, 
 }
 
 void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
+	// for (idx_t i = 0; i < parents.size(); i++) {
+	// 	auto &op = parents[i];
+	// 	Printer::PrintF("%s, ", op.get().GetName());
+	// }
+	// Printer::PrintF("\n");
 	switch (op->type) {
 	// These operators depend on column order.
 	// If their immediate child is a projection, keep it and recurse into the projection’s child.
@@ -89,28 +94,39 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		if (comp_join.join_type == JoinType::MARK) {
 			break; // bail
 		}
+		auto &left = op->children[0];
+		auto &right = op->children[1];
 
 		// We can pull through this operator, add it to the stack
-		parents.push_back(*op);
+		parents.push_back(op);
 		if (comp_join.join_type == JoinType::SEMI) {
 			// LHS: can pull through
-			Optimize(op->children[0]);
+			Optimize(left);
 
 			// RHS: Cannot pull through. Add a projection "barrier"
-			InsertProjectionBelowOp(op, op->children[1], false);
+			InsertProjectionBelowOp(op, right, false);
+			PopParents(*op);
 		} else {
 			// All other joins: recurse normally on both sides
-			for (auto &child : op->children) {
-				Optimize(child);
+			// for (auto &child : op->children) {
+			// 	Optimize(child);
+			// }
+			Optimize(left);
+			Printer::PrintF("In join");
+			for (idx_t i = 0; i < parents.size(); i++) {
+				auto &op = parents[i];
+				Printer::PrintF("%s, ", op.get()->GetName());
 			}
+			Optimize(right);
+			PopParents(*op);
 		}
 
-		PopParents(*op);
+		// PopParents(*op);
 		return;
 	}
 	case LogicalOperatorType::LOGICAL_FILTER: {
 		// We can pull through this operator, add it to the stack
-		parents.push_back(*op);
+		parents.push_back(op);
 
 		// Recurse
 		Optimize(op->children[0]);
@@ -119,8 +135,27 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		return;
 	}
 	case LogicalOperatorType::LOGICAL_PROJECTION: {
+		// Printer::PrintF("Can pull it up to %d", pull_up_to_here);
+		// for (idx_t i = 0; i < parents.size(); i++) {
+		// 	auto &op = parents[i];
+		// 	Printer::PrintF("%s, ", op.get()->GetName());
+		// }
+		// Printer::PrintF("\n");
 		auto &proj = op->Cast<LogicalProjection>();
 		auto proj_bindings = proj.GetColumnBindings();
+		// for (auto &parent_op : parents) {
+		// 	if (parent_op.get().get()->type == LogicalOperatorType::LOGICAL_PROJECTION) {
+		// 		// Stop pulling this projection through another projection
+		// 		Optimize(op->children[0]); // recurse normally
+		// 		return;
+		// 	}
+		// }
+		Printer::PrintF("Handling projection %d", proj.table_index);
+		Printer::PrintF("In projection");
+		for (idx_t i = 0; i < parents.size(); i++) {
+			auto &op = parents[i];
+			Printer::PrintF("%s, ", op.get()->GetName());
+		}
 
 		// Check if all expressions are simple column refs
 		// Cannot pull this projection up safely if any expression is not a column ref
@@ -133,28 +168,31 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			}
 		}
 
-		// loop backwards through parents
-		// call LogicalOperatorVisitor::EnumerateExpressions on each parent to figure out if you can push through it
 		// if expressions in the projections are colrefs, we can always pull it up
 		// if it's not a colref, we can pull it up only if it does not appear in the operator enumerate expressions
 		idx_t pull_up_to_here = parents.size();
 		for (idx_t i = parents.size(); i > 0; i--) {
 			idx_t parent_idx = i - 1;
-			auto &parent_op = parents[parent_idx];
+			LogicalOperator &parent_op = *parents[parent_idx].get();
 			bool can_pull_through = true;
 
 			LogicalOperatorVisitor::EnumerateExpressions(parent_op, [&](unique_ptr<Expression> *expr) {
 				ExpressionIterator::EnumerateExpression(*expr, [&](unique_ptr<Expression> &child_expr) {
-					if (child_expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-						auto &colref = child_expr->Cast<BoundColumnRefExpression>();
-						auto entry = projection_map.find(colref.binding);
-						if (entry != projection_map.end()) {
-							// Projection is referenced by parent
-							if (entry->second->type != ExpressionType::BOUND_COLUMN_REF) {
-								// Not a simple column ref, cannot pull through
-								can_pull_through = false;
-							}
-						}
+					if (child_expr->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+						return;
+					}
+
+					auto &colref = child_expr->Cast<BoundColumnRefExpression>();
+					auto entry = projection_map.find(colref.binding);
+
+					if (entry == projection_map.end()) {
+						return; // not referencing this projection
+					}
+
+					// This parent references a projection output
+					// If that output is NOT a simple column ref -> we cannot pull through
+					if (entry->second->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+						can_pull_through = false;
 					}
 				});
 			});
@@ -168,46 +206,158 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 
 		// after the loop we figured out how far we can pull it up
 		// If we can pull up, replace bindings along parents and remove this projection
-		if (pull_up_to_here > 0 && all_column_refs) {
-			auto child_bindings = op->children[0]->GetColumnBindings();
-			// Do not remove projections above UNNEST. The projection above the unnest extracts just the required
-			// fields. Removing it forces all other operators to carry the full struct, eventually causing the memory
-			// blowup.
-			if (op->children[0]->type == LogicalOperatorType::LOGICAL_UNNEST) {
-				parents.push_back(*op);
+		if (pull_up_to_here > 0) {
+			if (all_column_refs) {
+				auto child_bindings = op->children[0]->GetColumnBindings();
+				// Do not remove projections above UNNEST. The projection above the unnest extracts just the required
+				// fields. Removing it forces all other operators to carry the full struct, eventually causing the memory
+				// blowup.
+				if (op->children[0]->type == LogicalOperatorType::LOGICAL_UNNEST) {
+					parents.push_back(op);
+					Optimize(op->children[0]);
+					PopParents(*op);
+					return;
+				}
+				ColumnBindingReplacer replacer;
+				for (idx_t i = 0; i < proj.expressions.size(); i++) {
+					auto &colref = proj.expressions[i]->Cast<BoundColumnRefExpression>();
+					replacer.replacement_bindings.emplace_back(proj_bindings[i], colref.binding);
+				}
+
+				replacer.stop_operator = proj.children[0];
+				replacer.VisitOperator(root);
+
+				// Re-run optimization after removing this projection.
+				// Binding rewrites can make parent projections redundant, and without
+				// another pass they would not be eliminated.
 				Optimize(op->children[0]);
-				PopParents(*op);
+				op = std::move(op->children[0]);
+
 				return;
 			}
 			ColumnBindingReplacer replacer;
+
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {
-				auto &colref = proj.expressions[i]->Cast<BoundColumnRefExpression>();
-				replacer.replacement_bindings.emplace_back(proj_bindings[i], colref.binding);
+				if (proj.expressions[i]->type == ExpressionType::BOUND_COLUMN_REF) {
+					auto &colref = proj.expressions[i]->Cast<BoundColumnRefExpression>();
+					replacer.replacement_bindings.emplace_back(
+						proj_bindings[i], colref.binding);
+				}
 			}
 
-			replacer.stop_operator = proj.children[0];
-			replacer.VisitOperator(root);
+			replacer.stop_operator = op.get();
 
-			// Re-run optimization after removing this projection.
-			// Binding rewrites can make parent projections redundant, and without
-			// another pass they would not be eliminated.
-			Optimize(op->children[0]);
-			op = std::move(op->children[0]);
+			// Rewrite only along pull-through chain
+			for (idx_t i = 0; i < pull_up_to_here; i++) {
+				replacer.VisitOperator(*parents[i].get());
+			}
+
+
+			// Printer::PrintF("op before detaching\n");
+			// op.get()->Print();
+
+			// Detach projection
+			auto projection_to_move = std::move(op);
+			// Printer::PrintF("Projection to Move\n");
+			// projection_to_move.get()->Print();
+			op = std::move(projection_to_move->children[0]);
+			// Printer::PrintF("op after Move\n");
+			// op.get()->Print();
+
+
+			// Insert projection at correct position
+
+			// Pull all the way up
+			// if (pull_up_to_here == parents.size()) {
+			// 	Printer::PrintF(" pull_up_to_here == parents.size() \n");
+			// 	if (parents.empty()) {
+			// 		projection_to_move->children[0] = std::move(op);
+			// 		op = std::move(projection_to_move);
+			// 		return;
+			// 	}
+			//
+			// 	Printer::PrintF("top_parent");
+			// 	parents[0].get().Print();
+			//
+			// auto &top_parent = parents[0].get();
+			//
+			// 	for (auto &child : top_parent.children) {
+			// 		if (child.get() == op.get()) {
+			// 			Printer::PrintF("child");
+			// 			child.get()->Print();
+			// 			projection_to_move->children[0] = std::move(child);
+			// 			Printer::PrintF("projection_to_move after move");
+			// 			projection_to_move.get()->Print();
+			// 			child = std::move(projection_to_move);
+			// 			Printer::PrintF("child after move");
+			// 			child.get()->Print();
+			// 			return;
+			// 		}
+			// 	}
+			// }
+			// // Insert in the middle
+			// else {
+			// 	auto &parent_above = parents[pull_up_to_here - 1].get();
+			// 	auto &child_below  = parents[pull_up_to_here].get();
+			//
+			// 	for (auto &child : parent_above.children) {
+			// 		if (child.get() == &child_below) {
+			// 			projection_to_move->children[0] = std::move(child);
+			// 			child = std::move(projection_to_move);
+			// 			return;
+			// 		}
+			// 	}
+			// }
+
+			if (pull_up_to_here == parents.size()) {
+				// Insert above all parents — op is the slot above parents[0]'s parent
+				// Just wrap op back with the projection on top
+				// projection_to_move->children[0] = std::move(op);
+				// Printer::PrintF("projection_to_move after move");
+				// projection_to_move.get()->Print();
+				// op = std::move(projection_to_move);
+				// Printer::PrintF("op after move");
+				// op.get()->Print();
+				// return;
+				auto &top_parent = parents[pull_up_to_here-1].get();
+
+				projection_to_move->children[0] = std::move(top_parent);
+				top_parent = std::move(projection_to_move);
+				 parents[pull_up_to_here-1] = top_parent->children[0];
+				// PopParents(*top_parent);
+				// parents.push_back(top_parent->children[0]);
+				// parents.insert(parents.begin(), top_parent->children[0]);
+				return;
+			}
+			// Insert between parents[pull_up_to_here-1] and parents[pull_up_to_here]
+			else {
+				auto &parent_above = parents[pull_up_to_here - 1].get();
+				auto &child_below  = parents[pull_up_to_here].get();
+
+				for (auto &child : parent_above->children) {
+					if (child.get() == child_below.get()) {
+						projection_to_move->children[0] = std::move(child);
+						child = std::move(projection_to_move);
+						return;
+					}
+				}
+			}
 
 			return;
+
 		}
 
 		// If we cannot pull up, push this projection to parents stack
-		parents.push_back(*op);
+		// if (op->type != LogicalOperatorType::LOGICAL_PROJECTION)
+			// parents.push_back(*op);
 
 		// Recurse on child
 		Optimize(op->children[0]);
 
 		// Clean up parents stack
-		if (!parents.empty() && &parents.back().get() == op.get()) {
+		if (!parents.empty() && parents.back().get() == op) {
 			parents.pop_back();
 		}
-
 		return;
 	}
 	default: {

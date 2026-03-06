@@ -2,19 +2,11 @@
 # description: Intersect correlated subquery
 # group: [pedro]
 
-# statement ok
-# PRAGMA enable_verification
-
 statement ok
-pragma disable_optimizer
+PRAGMA enable_verification
 
 statement ok
 CREATE TABLE t0 (c1 TINYINT);
-
-statement ok
-pragma enable_optimizer
-
-mode skip
 
 query I
 SELECT (SELECT 1 INTERSECT SELECT 1 HAVING true) FROM t0;
@@ -23,8 +15,6 @@ SELECT (SELECT 1 INTERSECT SELECT 1 HAVING true) FROM t0;
 query I
 SELECT (SELECT 1 INTERSECT SELECT 1 HAVING false) FROM t0;
 ----
-
-mode unskip
 
 query I
 SELECT (SELECT 1 INTERSECT SELECT 1 HAVING t0.rowid) FROM t0;

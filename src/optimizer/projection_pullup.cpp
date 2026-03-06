@@ -237,15 +237,15 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 					return;
 			}
 
-			for (idx_t i = 0; i < parents.size(); i++) {
-				auto &op = parents[i];
-				Printer::PrintF("%s, ", op.get()->GetName());
-			}
-			Printer::PrintF("\n");
-
-			// if (!can_pull_through) {
-			// return;
+			// for (idx_t i = 0; i < parents.size(); i++) {
+			// 	auto &op = parents[i];
+			// 	Printer::PrintF("%s, ", op.get()->GetName());
 			// }
+			// Printer::PrintF("\n");
+
+			if (!can_pull_through) {
+				return;
+			}
 
 			auto &insert_at_node = *parents[parents.size() - pull_up_to_here].get();
 

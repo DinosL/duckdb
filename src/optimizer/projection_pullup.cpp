@@ -107,17 +107,15 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		if (comp_join.join_type == JoinType::MARK || comp_join.join_type == JoinType::SINGLE) {
 			break; // bail
 		}
-		auto &left = op->children[0];
-		auto &right = op->children[1];
 
 		// We can pull through this operator, add it to the stack
 		parents.push_back(op);
 		if (comp_join.join_type == JoinType::SEMI) {
 			// LHS: can pull through
-			Optimize(left);
+			Optimize(comp_join.children[0]);
 
 			// RHS: Cannot pull through. Add a projection "barrier"
-			InsertProjectionBelowOp(op, right, false);
+			InsertProjectionBelowOp(op, comp_join.children[1], false);
 		} else {
 			// All other joins: recurse normally on both sides
 			for (auto &child : op->children) {
@@ -234,10 +232,20 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 					return;
 				}
 			}
-
-			if (!can_pull_through) {
-				return;
+			for (auto &expr : proj.expressions) {
+				if (expr->IsVolatile())
+					return;
 			}
+
+			for (idx_t i = 0; i < parents.size(); i++) {
+				auto &op = parents[i];
+				Printer::PrintF("%s, ", op.get()->GetName());
+			}
+			Printer::PrintF("\n");
+
+			// if (!can_pull_through) {
+			// return;
+			// }
 
 			auto &insert_at_node = *parents[parents.size() - pull_up_to_here].get();
 
@@ -250,10 +258,23 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			if (parent_of_insert->type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
 				return;
 			}
+			// Prepare the column binding replacer once
+			ColumnBindingReplacer replacer;
+			for (idx_t i = 0; i < proj.expressions.size(); i++) {
+				if (proj.expressions[i]->type == ExpressionType::BOUND_COLUMN_REF) {
+					auto &colref = proj.expressions[i]->Cast<BoundColumnRefExpression>();
+					replacer.replacement_bindings.emplace_back(proj_bindings[i], colref.binding);
+				}
+			}
+			replacer.stop_operator = op.get();
 
+			// Rewrite along the pull-through chain
+			for (idx_t i = 0; i < pull_up_to_here; i++) {
+				replacer.VisitOperator(*parents[i].get());
+			}
 			// If the target parent is already a projection, copy the expressions from the current projection
 			// into the parent instead of creating a new projection, then remove the current projection.
-			if (parent_of_insert && parent_of_insert->type == LogicalOperatorType::LOGICAL_PROJECTION) {
+			if (parent_of_insert->type == LogicalOperatorType::LOGICAL_PROJECTION) {
 				auto &parent_proj = parent_of_insert->Cast<LogicalProjection>();
 
 				// Copy expressions into parent projection
@@ -262,64 +283,28 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 						if (child_expr->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 							return;
 						}
-
 						auto &colref = child_expr->Cast<BoundColumnRefExpression>();
 						auto entry = projection_map.find(colref.binding);
-
 						if (entry != projection_map.end()) {
 							child_expr = entry->second->Copy();
 						}
 					});
 				}
 
-				ColumnBindingReplacer replacer;
-
-				for (idx_t i = 0; i < proj.expressions.size(); i++) {
-					if (proj.expressions[i]->type == ExpressionType::BOUND_COLUMN_REF) {
-						auto &colref = proj.expressions[i]->Cast<BoundColumnRefExpression>();
-						replacer.replacement_bindings.emplace_back(proj_bindings[i], colref.binding);
-					}
-				}
-
-				replacer.stop_operator = op.get();
-
-				// Rewrite only along pull-through chain
-				for (idx_t i = 0; i < pull_up_to_here; i++) {
-					replacer.VisitOperator(*parents[i].get());
-				}
-
 				// Remove current projection
 				op = std::move(op->children[0]);
 
-				// Continue optimizing from child
 				Optimize(op);
 				return;
 			}
 
-			ColumnBindingReplacer replacer;
-
-			for (idx_t i = 0; i < proj.expressions.size(); i++) {
-				if (proj.expressions[i]->type == ExpressionType::BOUND_COLUMN_REF) {
-					auto &colref = proj.expressions[i]->Cast<BoundColumnRefExpression>();
-					replacer.replacement_bindings.emplace_back(proj_bindings[i], colref.binding);
-				}
-			}
-
-			replacer.stop_operator = op.get();
-
-			for (idx_t i = 0; i < pull_up_to_here; i++) {
-				replacer.VisitOperator(*parents[i].get());
-			}
-
-			// Detach projection
+			// General case: actually pull up the projection
 			auto projection_to_move = std::move(op);
 			op = std::move(projection_to_move->children[0]);
 
 			auto &top_parent = parents[parents.size() - pull_up_to_here].get();
-
 			projection_to_move->children[0] = std::move(top_parent);
 			top_parent = std::move(projection_to_move);
-			return;
 		}
 
 		// Recurse on child

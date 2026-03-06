@@ -21,7 +21,7 @@
 namespace duckdb {
 
 #ifdef DEBUG
-bool DBConfigOptions::debug_print_bindings = true;
+bool DBConfigOptions::debug_print_bindings = false;
 #endif
 
 #define DUCKDB_SETTING(_PARAM)                                                                                         \

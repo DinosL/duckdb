@@ -22,7 +22,7 @@ public:
 private:
 	Optimizer &optimizer;
 	LogicalOperator &root;
-	vector<reference<unique_ptr<LogicalOperator>>> parents;
+	vector<reference<LogicalOperator>> parents;
 };
 
 } // namespace duckdb

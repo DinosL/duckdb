@@ -10,7 +10,7 @@ namespace duckdb {
 
 void ProjectionPullup::PopParents(const LogicalOperator &op) {
 	// pop back elements until the last operator in the stack is THIS operator
-	while (!parents.empty() && parents.back().get().get() != &op) {
+	while (!parents.empty() && &parents.back().get() != &op) {
 		parents.pop_back();
 	}
 	// then pop THIS operator back, and stop
@@ -90,6 +90,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		}
 		return;
 	}
+	case LogicalOperatorType::LOGICAL_DELIM_JOIN:
 	case LogicalOperatorType::LOGICAL_DISTINCT:
 	case LogicalOperatorType::LOGICAL_RECURSIVE_CTE:
 	case LogicalOperatorType::LOGICAL_MATERIALIZED_CTE:
@@ -109,7 +110,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		}
 
 		// We can pull through this operator, add it to the stack
-		parents.push_back(op);
+		parents.push_back(*op);
 		if (comp_join.join_type == JoinType::SEMI) {
 			// LHS: can pull through
 			Optimize(comp_join.children[0]);
@@ -128,7 +129,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 	}
 	case LogicalOperatorType::LOGICAL_FILTER: {
 		// We can pull through this operator, add it to the stack
-		parents.push_back(op);
+		parents.push_back(*op);
 
 		// Recurse
 		Optimize(op->children[0]);
@@ -157,7 +158,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		idx_t pull_up_to_here = parents.size();
 		for (idx_t i = parents.size(); i > 0; i--) {
 			idx_t parent_idx = i - 1;
-			LogicalOperator &parent_op = *parents[parent_idx].get();
+			LogicalOperator &parent_op = parents[parent_idx].get();
 			can_pull_through = true;
 
 			LogicalOperatorVisitor::EnumerateExpressions(parent_op, [&](unique_ptr<Expression> *expr) {
@@ -195,7 +196,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			// fields. Removing it forces all other operators to carry the full struct, eventually causing the
 			// memory blowup.
 			if (op->children[0]->type == LogicalOperatorType::LOGICAL_UNNEST) {
-				parents.push_back(op);
+				parents.push_back(*op);
 				Optimize(op->children[0]);
 				PopParents(*op);
 				return;
@@ -232,22 +233,13 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 					return;
 				}
 			}
-			for (auto &expr : proj.expressions) {
-				if (expr->IsVolatile())
-					return;
-			}
-
-			// for (idx_t i = 0; i < parents.size(); i++) {
-			// 	auto &op = parents[i];
-			// 	Printer::PrintF("%s, ", op.get()->GetName());
-			// }
-			// Printer::PrintF("\n");
 
 			if (!can_pull_through) {
 				return;
 			}
 
-			auto &insert_at_node = *parents[parents.size() - pull_up_to_here].get();
+			// auto &insert_at_node = parents[parents.size() - pull_up_to_here].get();
+			LogicalOperator &insert_at_node = parents[parents.size() - pull_up_to_here].get();
 
 			// FIXME: would like to make that faster/better
 			auto *parent_of_insert = FindParent(insert_at_node, root);
@@ -266,11 +258,11 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 					replacer.replacement_bindings.emplace_back(proj_bindings[i], colref.binding);
 				}
 			}
-			replacer.stop_operator = op.get();
+			replacer.stop_operator = op->children[0].get();
 
 			// Rewrite along the pull-through chain
 			for (idx_t i = 0; i < pull_up_to_here; i++) {
-				replacer.VisitOperator(*parents[i].get());
+				replacer.VisitOperator(parents[i].get());
 			}
 			// If the target parent is already a projection, copy the expressions from the current projection
 			// into the parent instead of creating a new projection, then remove the current projection.
@@ -301,10 +293,17 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			// General case: actually pull up the projection
 			auto projection_to_move = std::move(op);
 			op = std::move(projection_to_move->children[0]);
+			auto *parent_of_top = FindParent(insert_at_node, root);
 
-			auto &top_parent = parents[parents.size() - pull_up_to_here].get();
-			projection_to_move->children[0] = std::move(top_parent);
-			top_parent = std::move(projection_to_move);
+			// Find where to rewire the plan
+			for (auto &child_ptr : parent_of_top->children) {
+				if (child_ptr.get() == &insert_at_node) {
+					projection_to_move->children[0] = std::move(child_ptr);
+					child_ptr = std::move(projection_to_move);
+					break;
+				}
+			}
+			return;
 		}
 
 		// Recurse on child

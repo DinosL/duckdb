@@ -79,6 +79,9 @@ void ProjectionPullup::InsertProjectionBelowOp(unique_ptr<LogicalOperator> &op, 
 
 void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 	switch (op->type) {
+		// case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
+		// op.get()->Print();
+		// break;
 	// These operators depend on column order.
 	// If their immediate child is a projection, keep it and recurse into the projection’s child.
 	// If no projection is present, insert one, then recurse into the newly added projection’s child.
@@ -90,7 +93,6 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 		}
 		return;
 	}
-	case LogicalOperatorType::LOGICAL_DELIM_JOIN:
 	case LogicalOperatorType::LOGICAL_DISTINCT:
 	case LogicalOperatorType::LOGICAL_RECURSIVE_CTE:
 	case LogicalOperatorType::LOGICAL_MATERIALIZED_CTE:
@@ -225,11 +227,9 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 				// Cannot pull up projections containing COALESCE. It is a computed expression
 				// that may reference multiple inputs or constants, and the binding replacer
 				// cannot rewrite parent references to point at a child binding that doesn't exist.
-				if (proj.expressions[i]->type == ExpressionType::OPERATOR_COALESCE) {
-					return;
-				}
-				// FIXME: I think constants are actually safe to pass through.
-				if (proj.expressions[i]->type == ExpressionType::VALUE_CONSTANT) {
+
+				// FIXME: Constants should be safe to pass through.
+				if (proj.expressions[i]->type == ExpressionType::OPERATOR_COALESCE || proj.expressions[i]->type == ExpressionType::VALUE_CONSTANT) {
 					return;
 				}
 			}
@@ -238,18 +238,11 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 				return;
 			}
 
-			// auto &insert_at_node = parents[parents.size() - pull_up_to_here].get();
 			LogicalOperator &insert_at_node = parents[parents.size() - pull_up_to_here].get();
 
 			// FIXME: would like to make that faster/better
 			auto *parent_of_insert = FindParent(insert_at_node, root);
 
-			// FIXME: Do not pull projections below aggregates. There are some cases (e.g. tpcds 23, 63) where the
-			// projection we are pulling up has no reference to a binding that the aggregate references and that causes
-			// a binding error.
-			if (parent_of_insert->type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
-				return;
-			}
 			// Prepare the column binding replacer once
 			ColumnBindingReplacer replacer;
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {
@@ -291,12 +284,33 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			}
 
 			// General case: actually pull up the projection
+			insert_at_node.ResolveOperatorTypes();
+			auto insert_bindings = insert_at_node.GetColumnBindings();
+			const auto insert_types = insert_at_node.types;
+			column_binding_set_t existing_bindings(proj_bindings.begin(), proj_bindings.end());
+
 			auto projection_to_move = std::move(op);
 			op = std::move(projection_to_move->children[0]);
-			auto *parent_of_top = FindParent(insert_at_node, root);
+
+			// Any bindings produced by insert_at_node that are still
+			// referenced above must be passed through the projection
+			idx_t next_col = proj.expressions.size();
+			replacer.replacement_bindings.clear();
+			for (idx_t i = 0; i < insert_bindings.size(); i++) {
+				if (existing_bindings.find(insert_bindings[i]) == existing_bindings.end()) {
+					proj.expressions.push_back(
+						make_uniq<BoundColumnRefExpression>(insert_types[i], insert_bindings[i]));
+					replacer.replacement_bindings.emplace_back(
+			insert_bindings[i], ColumnBinding(proj.table_index, next_col));
+					next_col++;
+				}
+			}
+
+			replacer.stop_operator = insert_at_node;
+			replacer.VisitOperator(*parent_of_insert);
 
 			// Find where to rewire the plan
-			for (auto &child_ptr : parent_of_top->children) {
+			for (auto &child_ptr : parent_of_insert->children) {
 				if (child_ptr.get() == &insert_at_node) {
 					projection_to_move->children[0] = std::move(child_ptr);
 					child_ptr = std::move(projection_to_move);

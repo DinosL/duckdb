@@ -149,6 +149,13 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			if (proj.expressions[i]->type != ExpressionType::BOUND_COLUMN_REF) {
 				all_column_refs = false;
 			}
+			if (proj.expressions[i]->IsVolatile()) {
+				// Recurse into child
+				parents.push_back(*op);
+				Optimize(op->children[0]);
+				PopParents(*op);
+				return;
+			}
 		}
 
 		bool can_pull_through = true;
@@ -183,13 +190,15 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			});
 
 			if (!can_pull_through) {
-				// Can only pull up to here
-				pull_up_to_here = parent_idx + 1;
 				break;
 			}
 		}
 
 		if (!can_pull_through) {
+			// Recurse into child
+			parents.push_back(*op);
+			Optimize(op->children[0]);
+			PopParents(*op);
 			return;
 		}
 
@@ -226,7 +235,7 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 
 			// Not all expressions are colrefs. We can pull up instead of removing
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {
-				// FIXME: Constants should be safe to pass through if they can from the non-nullable side of a join.
+				// FIXME: Constants should be safe to pass through if they are in projections on the non-nullable side of a join.
 				if (proj.expressions[i]->type == ExpressionType::VALUE_CONSTANT) {
 					return;
 				}

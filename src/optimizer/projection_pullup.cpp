@@ -79,9 +79,6 @@ void ProjectionPullup::InsertProjectionBelowOp(unique_ptr<LogicalOperator> &op, 
 
 void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 	switch (op->type) {
-		// case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
-		// op.get()->Print();
-		// break;
 	// These operators depend on column order.
 	// If their immediate child is a projection, keep it and recurse into the projection’s child.
 	// If no projection is present, insert one, then recurse into the newly added projection’s child.
@@ -153,7 +150,8 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 				all_column_refs = false;
 			}
 		}
-		bool can_pull_through;
+
+		bool can_pull_through = true;
 
 		// if expressions in the projections are colrefs, we can always pull it up
 		// if it's not a colref, we can pull it up only if it does not appear in the operator enumerate expressions
@@ -173,11 +171,11 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 					auto entry = projection_map.find(colref.binding);
 
 					if (entry == projection_map.end()) {
-						return; // not referencing this projection
+						return;
 					}
 
 					// This parent references a projection output
-					// If that output is NOT a simple column ref -> we cannot pull through
+					// If that output is NOT a simple column ref, we cannot pull through
 					if (entry->second->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 						can_pull_through = false;
 					}
@@ -189,6 +187,10 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 				pull_up_to_here = parent_idx + 1;
 				break;
 			}
+		}
+
+		if (!can_pull_through) {
+			return;
 		}
 
 		// after the loop we figured out how far we can pull it up
@@ -224,18 +226,10 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 
 			// Not all expressions are colrefs. We can pull up instead of removing
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {
-				// Cannot pull up projections containing COALESCE. It is a computed expression
-				// that may reference multiple inputs or constants, and the binding replacer
-				// cannot rewrite parent references to point at a child binding that doesn't exist.
-
-				// FIXME: Constants should be safe to pass through.
-				if (proj.expressions[i]->type == ExpressionType::OPERATOR_COALESCE || proj.expressions[i]->type == ExpressionType::VALUE_CONSTANT) {
+				// FIXME: Constants should be safe to pass through if they can from the non-nullable side of a join.
+				if (proj.expressions[i]->type == ExpressionType::VALUE_CONSTANT) {
 					return;
 				}
-			}
-
-			if (!can_pull_through) {
-				return;
 			}
 
 			LogicalOperator &insert_at_node = parents[parents.size() - pull_up_to_here].get();
@@ -251,39 +245,12 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 					replacer.replacement_bindings.emplace_back(proj_bindings[i], colref.binding);
 				}
 			}
-			replacer.stop_operator = op->children[0].get();
-
-			// Rewrite along the pull-through chain
 			for (idx_t i = 0; i < pull_up_to_here; i++) {
 				replacer.VisitOperator(parents[i].get());
 			}
-			// If the target parent is already a projection, copy the expressions from the current projection
-			// into the parent instead of creating a new projection, then remove the current projection.
-			if (parent_of_insert->type == LogicalOperatorType::LOGICAL_PROJECTION) {
-				auto &parent_proj = parent_of_insert->Cast<LogicalProjection>();
+			replacer.replacement_bindings.clear();
 
-				// Copy expressions into parent projection
-				for (auto &expr : parent_proj.expressions) {
-					ExpressionIterator::EnumerateExpression(expr, [&](unique_ptr<Expression> &child_expr) {
-						if (child_expr->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-							return;
-						}
-						auto &colref = child_expr->Cast<BoundColumnRefExpression>();
-						auto entry = projection_map.find(colref.binding);
-						if (entry != projection_map.end()) {
-							child_expr = entry->second->Copy();
-						}
-					});
-				}
-
-				// Remove current projection
-				op = std::move(op->children[0]);
-
-				Optimize(op);
-				return;
-			}
-
-			// General case: actually pull up the projection
+			// actually pull up the projection
 			insert_at_node.ResolveOperatorTypes();
 			auto insert_bindings = insert_at_node.GetColumnBindings();
 			const auto insert_types = insert_at_node.types;
@@ -295,19 +262,17 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 			// Any bindings produced by insert_at_node that are still
 			// referenced above must be passed through the projection
 			idx_t next_col = proj.expressions.size();
-			replacer.replacement_bindings.clear();
 			for (idx_t i = 0; i < insert_bindings.size(); i++) {
 				if (existing_bindings.find(insert_bindings[i]) == existing_bindings.end()) {
 					proj.expressions.push_back(
-						make_uniq<BoundColumnRefExpression>(insert_types[i], insert_bindings[i]));
-					replacer.replacement_bindings.emplace_back(
-			insert_bindings[i], ColumnBinding(proj.table_index, next_col));
+					    make_uniq<BoundColumnRefExpression>(insert_types[i], insert_bindings[i]));
+					replacer.replacement_bindings.emplace_back(insert_bindings[i],
+					                                           ColumnBinding(proj.table_index, next_col));
 					next_col++;
 				}
 			}
-
-			replacer.stop_operator = insert_at_node;
-			replacer.VisitOperator(*parent_of_insert);
+			replacer.stop_operator = &insert_at_node;
+			replacer.VisitOperator(root);
 
 			// Find where to rewire the plan
 			for (auto &child_ptr : parent_of_insert->children) {

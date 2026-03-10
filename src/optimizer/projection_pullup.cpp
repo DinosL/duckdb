@@ -235,7 +235,8 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 
 			// Not all expressions are colrefs. We can pull up instead of removing
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {
-				// FIXME: Constants should be safe to pass through if they are in projections on the non-nullable side of a join.
+				// FIXME: Constants should be safe to pass through if they are in projections on the non-nullable side
+				// of a join.
 				if (proj.expressions[i]->type == ExpressionType::VALUE_CONSTANT) {
 					return;
 				}

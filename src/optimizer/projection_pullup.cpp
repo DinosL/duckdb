@@ -227,8 +227,11 @@ void ProjectionPullup::Optimize(unique_ptr<LogicalOperator> &op) {
 				// Re-run optimization after removing this projection.
 				// Binding rewrites can make parent projections redundant, and without
 				// another pass they would not be eliminated.
-				Optimize(op->children[0]);
-				op = std::move(op->children[0]);
+				// Optimize(op->children[0]);
+				// op = std::move(op->children[0]);
+				auto child = std::move(op->children[0]);
+				op = std::move(child);
+				Optimize(op);
 
 				return;
 			}

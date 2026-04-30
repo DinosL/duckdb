@@ -50,10 +50,10 @@ void PhysicalUnion::BuildPipelines(Pipeline &current, MetaPipeline &meta_pipelin
 			order_matters = true;
 		}
 		auto partition_info = sink->RequiredPartitionInfo();
-		if (partition_info.batch_index) {
-			order_matters = true;
-		}
-		if (!sink->ParallelSink()) {
+		// batch index ordering is handled by AssignNextBatchIndex -
+		// BATCH_CREATE_TABLE_AS sorts collections by batch index on finalize,
+		// so parallel execution is safe here and we do not set order_matters
+		if (!partition_info.batch_index && !sink->ParallelSink()) {
 			order_matters = true;
 		}
 	}

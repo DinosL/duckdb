@@ -1,0 +1,28 @@
+# name: test/sql/aggregate/aggregates/force_aggregate_state_export.test
+# description: debug_force_aggregate_state_export exports and re-imports aggregate states without memory pressure
+# group: [aggregates]
+
+statement ok
+SET threads=1;
+
+statement ok
+SET debug_force_aggregate_state_export='COMBINE';
+
+query II
+SELECT count(*), sum(list_sum(l)) FROM (SELECT (i % 100)::VARCHAR AS k, list(i) AS l FROM range(1000) t(i) GROUP BY k);
+----
+100	499500
+
+statement ok
+SET threads=4;
+
+statement ok
+SET debug_force_aggregate_state_export='SINK';
+
+# two sinking threads
+query II
+SELECT count(*), sum(list_sum(l)) FROM (
+	SELECT (i % 100)::VARCHAR AS k, list(i) AS l FROM (FROM range(1000) t(i) UNION ALL FROM range(1000) t(i)) GROUP BY k
+);
+----
+100	999000

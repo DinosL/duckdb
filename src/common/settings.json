@@ -409,6 +409,14 @@
         "is_debug": true
     },
     {
+        "name": "debug_force_aggregate_state_export",
+        "description": "Force aggregate states with a spill plan to be exported and re-imported.",
+        "type": "ENUM<DebugAggregateStateExport>",
+        "default_scope": "local",
+        "default_value": "NONE",
+        "is_debug": true
+    },
+    {
         "name": "debug_force_bitpacking_mode",
         "description": "Forces a specific bitpacking mode.",
         "type": "ENUM<BitpackingMode>",

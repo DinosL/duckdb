@@ -859,6 +859,20 @@ struct DebugFileDescriptorLimitSetting {
 	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
 };
 
+struct DebugForceAggregateStateExportSetting {
+	using RETURN_TYPE = DebugAggregateStateExport;
+	static constexpr const char *Name = "debug_force_aggregate_state_export";
+	static constexpr const char *Description =
+	    "Force aggregate states with a spill plan to be exported and re-imported (NONE, COMBINE or SINK).";
+	static constexpr const char *InputType = "VARCHAR";
+	static constexpr bool IsDebug = true;
+	static constexpr bool IsDeprecated = false;
+	static constexpr const char *DefaultValue = "NONE";
+	static constexpr SettingScopeTarget Scope = SettingScopeTarget::LOCAL_DEFAULT;
+	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+	static void OnSet(SettingCallbackInfo &info, Value &input);
+};
+
 struct ForceBitpackingModeSetting {
 	using RETURN_TYPE = BitpackingMode;
 	static constexpr const char *Name = "debug_force_bitpacking_mode";

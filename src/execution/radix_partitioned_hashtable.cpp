@@ -17,6 +17,7 @@
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/temporary_memory_manager.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/settings.hpp"
 
 namespace duckdb {
 
@@ -132,9 +133,12 @@ RadixHTGlobalSinkState::RadixHTGlobalSinkState(ClientContext &context_p, const R
       memory_limit(BufferManager::GetBufferManager(context).GetOperatorMemoryLimit()),
       block_alloc_size(BufferManager::GetBufferManager(context).GetBlockAllocSize()), any_combined(false),
       any_abandoned(false), radix_ht(radix_ht_p),
-      spill_plan(AggregateStateSpilling::TryCreateSpillPlan(radix_ht.GetLayout())), config(*this),
-      stored_allocators_size(0), finalize_done(0), scan_pin_properties(TupleDataPinProperties::DESTROY_AFTER_DONE),
-      count_before_combining(0), size_before_combining(0), max_partition_size(0) {
+      spill_plan(AggregateStateSpilling::TryCreateSpillPlan(radix_ht.GetLayout())),
+      forced_export(spill_plan ? Settings::Get<DebugForceAggregateStateExportSetting>(context)
+                               : DebugAggregateStateExport::NONE),
+      config(*this), stored_allocators_size(0), finalize_done(0),
+      scan_pin_properties(TupleDataPinProperties::DESTROY_AFTER_DONE), count_before_combining(0),
+      size_before_combining(0), max_partition_size(0) {
 	spill_phase = SpillPhase::NATIVE_ALLOWED;
 
 	SetReservationFloor(context, MaxValue(config.GetRadixBits(), config.GetMaximumSinkRadixBits()));
@@ -579,8 +583,9 @@ void ExportAbandonedData(ClientContext &context, RadixHTGlobalSinkState &gstate,
 	for (auto &exported : lstate.abandoned_exported_data) {
 		exported_bytes += exported ? exported->SizeInBytes() : 0;
 	}
-	while (exported_bytes / lstate.abandoned_exported_data.size() >
-	           gstate.GetThreadLimit() / RadixHTConfig::AGGREGATE_STATE_SPILL_DIVISOR &&
+	while (((gstate.forced_export == DebugAggregateStateExport::SINK && exported_radix_bits <= radix_bits) ||
+	        exported_bytes / lstate.abandoned_exported_data.size() >
+	            gstate.GetThreadLimit() / RadixHTConfig::AGGREGATE_STATE_SPILL_DIVISOR) &&
 	       exported_radix_bits + RadixHTConfig::REPARTITION_RADIX_BITS <=
 	           RadixHTConfig::MAXIMUM_FINAL_SINK_RADIX_BITS) {
 		{
@@ -617,6 +622,9 @@ idx_t RadixHTGlobalSinkState::SpillableSize(GroupedAggregateHashTable &ht) const
 
 // Whether this thread's aggregate states should be exported to spillable storage
 bool ShouldExportStates(RadixHTGlobalSinkState &gstate, RadixHTLocalSinkState &lstate, GroupedAggregateHashTable &ht) {
+	if (gstate.forced_export == DebugAggregateStateExport::SINK) {
+		return true;
+	}
 	const auto arena_size = ht.GetAggregateAllocator()->AllocationSize();
 	if (arena_size == 0) {
 		// every current state is inline, and exporting would only cost
@@ -774,7 +782,8 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, DataChunk &chunk
 	// Row width and aggregate state size can increase without filling the pointer table.
 	const auto total_size = ht.GetSizeInBytes();
 	UpdateSinkReservation(context.client, gstate, ht, total_size);
-	const auto memory_pressure = MemoryPressure(gstate, lstate, ht, total_size);
+	const auto memory_pressure =
+	    gstate.forced_export == DebugAggregateStateExport::SINK || MemoryPressure(gstate, lstate, ht, total_size);
 	if (!memory_pressure &&
 	    ht.Count() + STANDARD_VECTOR_SIZE < GroupedAggregateHashTable::ResizeThreshold(lstate.local_sink_capacity)) {
 		return;
@@ -885,7 +894,8 @@ void RadixPartitionedHashTable::Combine(ExecutionContext &context, GlobalSinkSta
 			gstate.spill_phase = SpillPhase::NATIVE_COMBINE_STARTED;
 		}
 	}
-	if (gstate.spill_plan && (must_export || ShouldExportStates(gstate, lstate, ht))) {
+	const auto forced = gstate.forced_export != DebugAggregateStateExport::NONE;
+	if (gstate.spill_plan && (must_export || forced || ShouldExportStates(gstate, lstate, ht))) {
 		// Everything this thread produced is in abandoned_data now, export it and free the arena
 		ExportAbandonedData(context.client, gstate, lstate);
 		ht.GetAggregateAllocator()->FreeAll();
@@ -969,7 +979,8 @@ void RadixPartitionedHashTable::Finalize(ClientContext &context, GlobalSinkState
 		// If true there is no need to combine, it was all done by a single thread in a single HT.
 		// This is the case when only one thread contributed data and the HT never overflowed its
 		// capacity (which would have caused Abandon() to be called, creating duplicates).
-		const auto single_ht = !gstate.external && gstate.active_threads == 1 && !gstate.any_abandoned;
+		const auto single_ht = !gstate.external && gstate.active_threads == 1 && !gstate.any_abandoned &&
+		                       gstate.uncombined_exported_data.empty();
 
 		auto &uncombined_partition_data = uncombined_data.GetPartitions();
 		const auto n_partitions = uncombined_partition_data.size();

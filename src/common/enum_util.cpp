@@ -31,6 +31,7 @@
 #include "duckdb/common/enums/copy_overwrite_mode.hpp"
 #include "duckdb/common/enums/cte_materialize.hpp"
 #include "duckdb/common/enums/date_part_specifier.hpp"
+#include "duckdb/common/enums/debug_aggregate_state_export.hpp"
 #include "duckdb/common/enums/debug_initialize.hpp"
 #include "duckdb/common/enums/debug_order_verification.hpp"
 #include "duckdb/common/enums/debug_progress_verification.hpp"
@@ -1849,6 +1850,25 @@ const char* EnumUtil::ToChars<DatePartSpecifier>(DatePartSpecifier value) {
 template<>
 DatePartSpecifier EnumUtil::FromString<DatePartSpecifier>(const char *value) {
 	return static_cast<DatePartSpecifier>(StringUtil::StringToEnum(GetDatePartSpecifierValues(), 25, "DatePartSpecifier", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDebugAggregateStateExportValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DebugAggregateStateExport::NONE), "NONE" },
+		{ static_cast<uint32_t>(DebugAggregateStateExport::COMBINE), "COMBINE" },
+		{ static_cast<uint32_t>(DebugAggregateStateExport::SINK), "SINK" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DebugAggregateStateExport>(DebugAggregateStateExport value) {
+	return StringUtil::EnumToString(GetDebugAggregateStateExportValues(), 3, "DebugAggregateStateExport", static_cast<uint32_t>(value));
+}
+
+template<>
+DebugAggregateStateExport EnumUtil::FromString<DebugAggregateStateExport>(const char *value) {
+	return static_cast<DebugAggregateStateExport>(StringUtil::StringToEnum(GetDebugAggregateStateExportValues(), 3, "DebugAggregateStateExport", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDebugInitializeValues() {

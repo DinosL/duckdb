@@ -75,6 +75,16 @@ void DebugCheckpointAbortSetting::OnSet(SettingCallbackInfo &info, Value &parame
 }
 
 //===----------------------------------------------------------------------===//
+// Debug Force Aggregate State Export
+//===----------------------------------------------------------------------===//
+void DebugForceAggregateStateExportSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
+	if (parameter.IsNull()) {
+		throw InvalidInputException("debug_force_aggregate_state_export setting cannot be NULL");
+	}
+	EnumUtil::FromString<DebugAggregateStateExport>(StringValue::Get(parameter));
+}
+
+//===----------------------------------------------------------------------===//
 // Force Bitpacking Mode
 //===----------------------------------------------------------------------===//
 void ForceBitpackingModeSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {

@@ -11,6 +11,7 @@
 #include "duckdb/execution/radix_partitioned_hashtable.hpp"
 #include "duckdb/execution/aggregate_hashtable.hpp"
 #include "duckdb/execution/aggregate_state_spilling.hpp"
+#include "duckdb/common/enums/debug_aggregate_state_export.hpp"
 #include "duckdb/storage/temporary_memory_manager.hpp"
 
 namespace duckdb {
@@ -142,6 +143,8 @@ public:
 	const RadixPartitionedHashTable &radix_ht;
 	//! The spill metadata of the aggregate layout, set if the states can spill
 	unique_ptr<AggregateStateSpillPlan> spill_plan;
+	//! Forced state export (debug setting), NONE without a spill plan
+	const DebugAggregateStateExport forced_export;
 	//! Config for partitioning
 	RadixHTConfig config;
 

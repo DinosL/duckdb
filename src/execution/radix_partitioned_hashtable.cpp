@@ -15,6 +15,7 @@
 #include "duckdb/execution/operator/aggregate/physical_hash_aggregate.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
+#include "duckdb/storage/buffer/buffer_pool.hpp"
 #include "duckdb/storage/temporary_memory_manager.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
@@ -644,12 +645,27 @@ idx_t SpillableLimit(RadixHTGlobalSinkState &gstate, GroupedAggregateHashTable &
 	return MinValue(thread_limit, gstate.memory_limit / gstate.number_of_threads / 10 * 8);
 }
 
+// The threads that sink may use the idle threads' share of the reservation while the buffer pool is below half the
+// memory limit.
+idx_t SpillPlanAbandonThreshold(RadixHTGlobalSinkState &gstate) {
+	const auto reservation = gstate.temporary_memory_state->GetReservation();
+	auto share = reservation / gstate.number_of_threads;
+	const auto sinking_threads = MaxValue<idx_t>(MinValue(gstate.number_of_threads, gstate.active_threads.load()), 1);
+	if (!gstate.external && sinking_threads < gstate.number_of_threads) {
+		const auto used = BufferManager::GetBufferManager(gstate.context).GetBufferPool().GetUsedMemory(false);
+		const auto budget = gstate.memory_limit / 2;
+		const auto extra = reservation / sinking_threads - share;
+		share += used < budget ? MinValue(extra, (budget - used) / sinking_threads) : 0;
+	}
+	return share / 10 * 8;
+}
+
 // Without a spill plan, arena pressure alone must not repeatedly abandon and re-create the same states.
 bool MemoryPressure(RadixHTGlobalSinkState &gstate, RadixHTLocalSinkState &lstate, GroupedAggregateHashTable &ht,
                     idx_t total_size) {
 	const auto thread_limit = gstate.GetThreadLimit();
 	if (gstate.spill_plan) {
-		return total_size > thread_limit || gstate.StatePressureExceeded(ht);
+		return total_size > SpillPlanAbandonThreshold(gstate) || gstate.StatePressureExceeded(ht);
 	}
 	if (total_size <= thread_limit) {
 		return false;

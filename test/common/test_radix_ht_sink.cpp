@@ -234,6 +234,45 @@ TEST_CASE("Arena pressure requests enough reservation to keep aggregate states r
 	}
 }
 
+TEST_CASE("A single sinking thread with a spill plan keeps its table up to the reservation of the idle threads",
+          "[radix_ht_sink]") {
+	for (const bool busy_pool : {false, true}) {
+		CAPTURE(busy_pool);
+		RadixSinkFixture fixture("1GB", true);
+		auto &global = fixture.Global();
+		auto &local = fixture.Local();
+		idx_t offset = 0;
+		auto sink = [&]() {
+			fixture.Keys(offset, NumericLimits<idx_t>::Maximum(), 1024);
+			fixture.Sink();
+			offset += STANDARD_VECTOR_SIZE;
+		};
+		sink();
+		local.ht->Resize(524288);
+		local.local_sink_capacity = local.ht->Capacity();
+		AllocatedData competing_allocation;
+		if (busy_pool) {
+			auto &manager = BufferManager::GetBufferManager(*fixture.con.context);
+			competing_allocation = manager.GetBufferAllocator().Allocate(750ULL * 1024 * 1024);
+		}
+		while (local.ht->GetSizeInBytes() <= global.GetThreadLimit() * 5 / 4 &&
+		       offset + 2 * STANDARD_VECTOR_SIZE < local.ht->ResizeThreshold()) {
+			sink();
+		}
+		if (busy_pool) {
+			// the idle threads' reservation is not taken when the buffer pool has no room for it
+			REQUIRE(local.ht->Count() < offset);
+			competing_allocation.Reset();
+		} else {
+			// the table exceeds an even split over all threads, but not the share of the single sinking thread
+			REQUIRE(local.ht->GetSizeInBytes() > global.GetThreadLimit() * 5 / 4);
+			REQUIRE(local.ht->Count() == offset);
+		}
+		fixture.Combine(0);
+		REQUIRE(fixture.ScanGroupCount() == offset);
+	}
+}
+
 TEST_CASE("Arena pressure still exports when the reservation cannot grow enough", "[radix_ht_sink]") {
 	for (const bool force_external : {false, true}) {
 		CAPTURE(force_external);
